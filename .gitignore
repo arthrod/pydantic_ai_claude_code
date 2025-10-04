@@ -8,3 +8,10 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Credentials and tokens
+.pypirc
+*.token
+.env
+.env.*
+secrets/

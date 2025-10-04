@@ -112,27 +112,41 @@ class ClaudeCodeModel(Model):
             schema = output_tool.parameters_json_schema
             import json
 
-            # Build a very explicit JSON instruction
-            json_instruction = f"""CRITICAL: You MUST respond with ONLY valid JSON. No explanations, no markdown, no extra text.
+            # Build concrete example
+            properties = schema.get('properties', {})
+            example_obj = {}
+            for field, props in properties.items():
+                field_type = props.get('type', 'string')
+                if field_type == 'integer':
+                    example_obj[field] = 42
+                elif field_type == 'number':
+                    example_obj[field] = 3.14
+                elif field_type == 'boolean':
+                    example_obj[field] = True
+                elif field_type == 'array':
+                    example_obj[field] = ["item1", "item2"]
+                elif field_type == 'object':
+                    example_obj[field] = {"key": "value"}
+                else:
+                    example_obj[field] = "example value"
 
-The JSON must match this EXACT schema:
+            json_instruction = f"""CRITICAL: You MUST respond with ONLY a JSON object matching this schema.
+
+Schema:
 {json.dumps(schema, indent=2)}
 
-REQUIRED fields: {schema.get('required', [])}
+Your response MUST be a JSON OBJECT with these fields: {list(properties.keys())}
 
-Example format:
-```json
-{{
-  {', '.join(f'"{field}": <{props.get("type", "value")}>' for field, props in schema.get('properties', {}).items())}
-}}
-```
+Example response format (use this EXACT structure):
+{json.dumps(example_obj, indent=2)}
 
-IMPORTANT:
-- Start your response with {{ and end with }}
-- Include ALL required fields
-- Use proper JSON syntax (strings in quotes, etc.)
-- Do NOT add any text before or after the JSON
-- Do NOT use markdown code blocks unless explicitly showing JSON"""
+RULES:
+- Your ENTIRE response must be ONLY the JSON object
+- Start with {{ and end with }}
+- Include ALL fields from the schema
+- Do NOT just return a single value like "7" or "hello"
+- Do NOT add explanations, markdown, or extra text
+- The response must be a complete JSON object, not a primitive value"""
 
             system_prompt_parts.append(json_instruction)
 
@@ -196,26 +210,41 @@ IMPORTANT:
             schema = output_tool.parameters_json_schema
             import json
 
-            json_instruction = f"""CRITICAL: You MUST respond with ONLY valid JSON. No explanations, no markdown, no extra text.
+            # Build concrete example
+            properties = schema.get('properties', {})
+            example_obj = {}
+            for field, props in properties.items():
+                field_type = props.get('type', 'string')
+                if field_type == 'integer':
+                    example_obj[field] = 42
+                elif field_type == 'number':
+                    example_obj[field] = 3.14
+                elif field_type == 'boolean':
+                    example_obj[field] = True
+                elif field_type == 'array':
+                    example_obj[field] = ["item1", "item2"]
+                elif field_type == 'object':
+                    example_obj[field] = {"key": "value"}
+                else:
+                    example_obj[field] = "example value"
 
-The JSON must match this EXACT schema:
+            json_instruction = f"""CRITICAL: You MUST respond with ONLY a JSON object matching this schema.
+
+Schema:
 {json.dumps(schema, indent=2)}
 
-REQUIRED fields: {schema.get('required', [])}
+Your response MUST be a JSON OBJECT with these fields: {list(properties.keys())}
 
-Example format:
-```json
-{{
-  {', '.join(f'"{field}": <{props.get("type", "value")}>' for field, props in schema.get('properties', {}).items())}
-}}
-```
+Example response format (use this EXACT structure):
+{json.dumps(example_obj, indent=2)}
 
-IMPORTANT:
-- Start your response with {{ and end with }}
-- Include ALL required fields
-- Use proper JSON syntax (strings in quotes, etc.)
-- Do NOT add any text before or after the JSON
-- Do NOT use markdown code blocks unless explicitly showing JSON"""
+RULES:
+- Your ENTIRE response must be ONLY the JSON object
+- Start with {{ and end with }}
+- Include ALL fields from the schema
+- Do NOT just return a single value like "7" or "hello"
+- Do NOT add explanations, markdown, or extra text
+- The response must be a complete JSON object, not a primitive value"""
             system_prompt_parts.append(json_instruction)
 
         if system_prompt_parts:

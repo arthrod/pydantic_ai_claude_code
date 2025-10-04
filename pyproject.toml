@@ -1,6 +1,6 @@
 [project]
 name = "pydantic-ai-claude-code"
-version = "0.1.0"
+version = "0.1.1"
 description = "Use local Claude Code CLI as a Pydantic AI model provider with full support for structured responses, tools, and streaming"
 readme = "README.md"
 authors = [
@@ -25,10 +25,10 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/pydantic-ai-claude-code"
-Documentation = "https://github.com/yourusername/pydantic-ai-claude-code#readme"
-Repository = "https://github.com/yourusername/pydantic-ai-claude-code"
-Issues = "https://github.com/yourusername/pydantic-ai-claude-code/issues"
+Homepage = "https://github.com/wehnsdaefflae/pydantic_ai_claude_code"
+Documentation = "https://github.com/wehnsdaefflae/pydantic_ai_claude_code#readme"
+Repository = "https://github.com/wehnsdaefflae/pydantic_ai_claude_code"
+Issues = "https://github.com/wehnsdaefflae/pydantic_ai_claude_code/issues"
 
 [build-system]
 requires = ["uv_build>=0.8.14,<0.9.0"]
