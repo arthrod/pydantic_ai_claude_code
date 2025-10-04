@@ -118,6 +118,14 @@ uv run python examples/advanced_example.py
 4. This approach ensures consistent handling of prompts regardless of length or special characters
 5. Temp directories are created with prefix `claude_prompt_*` in `/tmp/`
 
+**Output File Strategy**: Both structured and unstructured outputs are written to temporary files:
+- **Unstructured output**: Written to `/tmp/claude_unstructured_output_<uuid>.txt`
+- **Structured output**: Written to `/tmp/claude_structured_output_<uuid>.json`
+- System prompt instructs Claude to write response to the specified file
+- Response is read from file and returned to Pydantic AI
+- Temporary files are cleaned up after reading
+- Fallback to CLI response text if file read fails
+
 **Structured Output Strategy**: When Pydantic AI requests structured output (via `output_tools`):
 1. Inject detailed JSON schema + example into system prompt
 2. Instruct Claude to write JSON to a specific temp file path using the Write tool
@@ -168,5 +176,9 @@ All tests use `pytest` and `pytest-asyncio`. Tests make real calls to the local 
 2. **Test CLI directly**: Run `claude --print --output-format json "What is 2+2?"` to verify CLI works
 3. **Enable verbose mode**: Set `verbose=True` in `ClaudeCodeProvider` to see CLI output
 4. **Check prompt files**: Prompts are written to `/tmp/claude_prompt_*/prompt.md` - examine these to verify prompt formatting
-5. **Check structured output files**: Structured output creates files in `/tmp/claude_structured_output_*.json`
+5. **Check output files**:
+   - Unstructured output: `/tmp/claude_unstructured_output_*.txt`
+   - Structured output: `/tmp/claude_structured_output_*.json`
+   - Note: Files are cleaned up after successful reads
 6. **Validate JSON manually**: If structured output fails, check the temp file exists and contains valid JSON
+7. **Fallback behavior**: If output files aren't created or can't be read, the system falls back to using CLI's direct response text

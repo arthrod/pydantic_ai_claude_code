@@ -69,6 +69,35 @@ class ClaudeCodeModel(Model):
         """Get the system identifier."""
         return "claude-code"
 
+    def _build_unstructured_output_instruction(
+        self, settings: ClaudeCodeSettings
+    ) -> str:
+        """Build instruction for unstructured (text) output via file.
+
+        Args:
+            settings: Settings dict to store output file path
+
+        Returns:
+            Instruction string to append to system prompt
+        """
+        # Generate unique filename for unstructured output
+        output_filename = f"/tmp/claude_unstructured_output_{uuid.uuid4().hex}.txt"
+        settings["__unstructured_output_file"] = output_filename
+
+        instruction = f"""IMPORTANT: OUTPUT FILE INSTRUCTION
+
+After completing your response, write your final answer to: {output_filename}
+
+INSTRUCTIONS:
+1. First, complete your analysis/work as needed
+2. Use the Write tool to create the file {output_filename}
+3. The file should contain your complete response in plain text
+4. Write only your final answer to the file (no preamble, no "here is the answer", just the content)
+
+Complete this task now."""
+
+        return instruction
+
     def _build_structured_output_instruction(
         self, output_tool: Any, settings: ClaudeCodeSettings
     ) -> str:
@@ -168,6 +197,10 @@ Create the file now."""
         if output_tools:
             json_instruction = self._build_structured_output_instruction(output_tools[0], settings)
             system_prompt_parts.append(json_instruction)
+        elif not function_tools:
+            # For unstructured output (no output_tools, no function_tools), use file-based output
+            unstructured_instruction = self._build_unstructured_output_instruction(settings)
+            system_prompt_parts.append(unstructured_instruction)
 
         if system_prompt_parts:
             combined_prompt = "\n\n".join(system_prompt_parts)
@@ -227,6 +260,10 @@ Create the file now."""
         if output_tools:
             json_instruction = self._build_structured_output_instruction(output_tools[0], settings)
             system_prompt_parts.append(json_instruction)
+        elif not function_tools:
+            # For unstructured output (no output_tools, no function_tools), use file-based output
+            unstructured_instruction = self._build_unstructured_output_instruction(settings)
+            system_prompt_parts.append(unstructured_instruction)
 
         if system_prompt_parts:
             combined_prompt = "\n\n".join(system_prompt_parts)
@@ -368,8 +405,23 @@ Create the file now."""
                 # Pydantic AI will retry with validation error
                 parts.append(TextPart(content=result_text))
         else:
-            # Regular text response
-            parts.append(TextPart(content=result_text))
+            # Unstructured text response - read from file
+            unstructured_file = settings.get("__unstructured_output_file") if settings else None
+
+            if unstructured_file and Path(unstructured_file).exists():
+                # Read content from file
+                try:
+                    with open(unstructured_file, 'r') as f:
+                        file_content = f.read()
+                    # Cleanup temp file
+                    self._cleanup_temp_file(unstructured_file)
+                    parts.append(TextPart(content=file_content))
+                except Exception:
+                    # Fallback to CLI response if file read fails
+                    parts.append(TextPart(content=result_text))
+            else:
+                # Fallback to CLI response if no file
+                parts.append(TextPart(content=result_text))
 
         # Determine model name and create usage
         model_name = self._get_model_name(response)
