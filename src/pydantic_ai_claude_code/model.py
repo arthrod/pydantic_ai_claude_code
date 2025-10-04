@@ -130,23 +130,30 @@ class ClaudeCodeModel(Model):
                 else:
                     example_obj[field] = "example value"
 
-            json_instruction = f"""CRITICAL: You MUST respond with ONLY a JSON object matching this schema.
+            # Create wrong example for single-field schemas
+            if len(properties) == 1:
+                field_name = list(properties.keys())[0]
+                wrong_example = f"WRONG: Just returning a value like: 7\nWRONG: Just returning a value like: \"hello\"\nCORRECT: Returning a JSON object like: {json.dumps(example_obj)}"
+            else:
+                wrong_example = f"WRONG: Returning a single value\nCORRECT: Returning a complete JSON object"
 
-Schema:
+            json_instruction = f"""CRITICAL: RESPOND WITH A JSON OBJECT ONLY.
+
+Schema (you MUST match this):
 {json.dumps(schema, indent=2)}
 
-Your response MUST be a JSON OBJECT with these fields: {list(properties.keys())}
+{wrong_example}
 
-Example response format (use this EXACT structure):
+CORRECT response format (COPY THIS STRUCTURE):
 {json.dumps(example_obj, indent=2)}
 
-RULES:
-- Your ENTIRE response must be ONLY the JSON object
-- Start with {{ and end with }}
-- Include ALL fields from the schema
-- Do NOT just return a single value like "7" or "hello"
-- Do NOT add explanations, markdown, or extra text
-- The response must be a complete JSON object, not a primitive value"""
+ABSOLUTELY REQUIRED:
+1. Your response MUST start with {{ and end with }}
+2. You MUST include ALL these fields: {list(properties.keys())}
+3. Even if there is only ONE field, you MUST wrap it in {{...}}
+4. Do NOT return bare values like 7 or "text"
+5. Do NOT add any text before or after the JSON
+6. The response must be valid JSON that can be parsed"""
 
             system_prompt_parts.append(json_instruction)
 
@@ -228,23 +235,30 @@ RULES:
                 else:
                     example_obj[field] = "example value"
 
-            json_instruction = f"""CRITICAL: You MUST respond with ONLY a JSON object matching this schema.
+            # Create wrong example for single-field schemas
+            if len(properties) == 1:
+                field_name = list(properties.keys())[0]
+                wrong_example = f"WRONG: Just returning a value like: 7\nWRONG: Just returning a value like: \"hello\"\nCORRECT: Returning a JSON object like: {json.dumps(example_obj)}"
+            else:
+                wrong_example = f"WRONG: Returning a single value\nCORRECT: Returning a complete JSON object"
 
-Schema:
+            json_instruction = f"""CRITICAL: RESPOND WITH A JSON OBJECT ONLY.
+
+Schema (you MUST match this):
 {json.dumps(schema, indent=2)}
 
-Your response MUST be a JSON OBJECT with these fields: {list(properties.keys())}
+{wrong_example}
 
-Example response format (use this EXACT structure):
+CORRECT response format (COPY THIS STRUCTURE):
 {json.dumps(example_obj, indent=2)}
 
-RULES:
-- Your ENTIRE response must be ONLY the JSON object
-- Start with {{ and end with }}
-- Include ALL fields from the schema
-- Do NOT just return a single value like "7" or "hello"
-- Do NOT add explanations, markdown, or extra text
-- The response must be a complete JSON object, not a primitive value"""
+ABSOLUTELY REQUIRED:
+1. Your response MUST start with {{ and end with }}
+2. You MUST include ALL these fields: {list(properties.keys())}
+3. Even if there is only ONE field, you MUST wrap it in {{...}}
+4. Do NOT return bare values like 7 or "text"
+5. Do NOT add any text before or after the JSON
+6. The response must be valid JSON that can be parsed"""
             system_prompt_parts.append(json_instruction)
 
         if system_prompt_parts:
