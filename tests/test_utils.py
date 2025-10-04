@@ -8,13 +8,13 @@ from pydantic_ai_claude_code.utils import build_claude_command, parse_stream_jso
 
 def test_build_claude_command_basic():
     """Test building basic Claude command."""
-    cmd = build_claude_command("What is 2+2?")
+    cmd = build_claude_command()
 
     assert "claude" in cmd
     assert "--print" in cmd
     assert "--output-format" in cmd
     assert "json" in cmd
-    assert "What is 2+2?" in cmd
+    assert "Follow the instructions in prompt.md" in cmd
 
 
 def test_build_claude_command_with_settings():
@@ -26,7 +26,7 @@ def test_build_claude_command_with_settings():
         "permission_mode": "acceptEdits",
     }
 
-    cmd = build_claude_command("Test prompt", settings=settings)
+    cmd = build_claude_command(settings=settings)
 
     assert "--model" in cmd
     assert "sonnet" in cmd
@@ -41,7 +41,7 @@ def test_build_claude_command_with_settings():
 
 def test_build_claude_command_stream_json():
     """Test building command with stream-json output."""
-    cmd = build_claude_command("Test", output_format="stream-json")
+    cmd = build_claude_command(output_format="stream-json")
 
     assert "--output-format" in cmd
     assert "stream-json" in cmd

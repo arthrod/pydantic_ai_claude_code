@@ -101,6 +101,7 @@ uv run python examples/advanced_example.py
 
 6. **CLI Utilities** (`utils.py`)
    - Builds Claude CLI commands with appropriate flags
+   - Manages prompt file creation in working directories
    - Runs commands sync/async via subprocess
    - Parses stream-json output events
 
@@ -109,6 +110,13 @@ uv run python examples/advanced_example.py
    - Enables string-based model usage: `Agent('claude-code:sonnet')`
 
 ### Key Design Patterns
+
+**Prompt File Strategy**: All prompts are passed to Claude CLI via files rather than command-line arguments:
+1. Each execution creates or uses a working directory (temp directory if none specified)
+2. Prompts are written to `prompt.md` in the working directory
+3. Claude CLI is invoked with the command: `Follow the instructions in prompt.md`
+4. This approach ensures consistent handling of prompts regardless of length or special characters
+5. Temp directories are created with prefix `claude_prompt_*` in `/tmp/`
 
 **Structured Output Strategy**: When Pydantic AI requests structured output (via `output_tools`):
 1. Inject detailed JSON schema + example into system prompt
@@ -159,5 +167,6 @@ All tests use `pytest` and `pytest-asyncio`. Tests make real calls to the local 
 1. **Check CLI availability**: Run `claude --version` to ensure CLI is installed
 2. **Test CLI directly**: Run `claude --print --output-format json "What is 2+2?"` to verify CLI works
 3. **Enable verbose mode**: Set `verbose=True` in `ClaudeCodeProvider` to see CLI output
-4. **Check temp files**: Structured output creates files in `/tmp/claude_structured_output_*.json`
-5. **Validate JSON manually**: If structured output fails, check the temp file exists and contains valid JSON
+4. **Check prompt files**: Prompts are written to `/tmp/claude_prompt_*/prompt.md` - examine these to verify prompt formatting
+5. **Check structured output files**: Structured output creates files in `/tmp/claude_structured_output_*.json`
+6. **Validate JSON manually**: If structured output fails, check the temp file exists and contains valid JSON

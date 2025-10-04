@@ -10,7 +10,6 @@ from .types import ClaudeCodeSettings, ClaudeJSONResponse, ClaudeStreamEvent
 
 
 def build_claude_command(
-    prompt: str | None = None,
     *,
     settings: ClaudeCodeSettings | None = None,
     input_format: str = "text",
@@ -19,7 +18,6 @@ def build_claude_command(
     """Build Claude CLI command with appropriate flags.
 
     Args:
-        prompt: The prompt to send to Claude (for non-streaming input)
         settings: Optional settings for Claude Code execution
         input_format: Input format ('text' or 'stream-json')
         output_format: Output format ('text', 'json', or 'stream-json')
@@ -75,9 +73,8 @@ def build_claude_command(
     if settings.get("dangerously_skip_permissions"):
         cmd.append("--dangerously-skip-permissions")
 
-    # Add prompt if provided (for non-streaming input)
-    if prompt:
-        cmd.append(prompt)
+    # Always reference prompt.md file
+    cmd.append("Follow the instructions in prompt.md")
 
     return cmd
 
@@ -100,11 +97,22 @@ def run_claude_sync(
         subprocess.CalledProcessError: If Claude CLI fails
         json.JSONDecodeError: If response is not valid JSON
     """
-    # Build command with prompt as argument
-    cmd = build_claude_command(prompt, settings=settings, output_format="json")
-
     # Determine working directory
     cwd = settings.get("working_directory") if settings else None
+
+    # If no working directory, create a temp one
+    if not cwd:
+        cwd = tempfile.mkdtemp(prefix="claude_prompt_")
+
+    # Ensure working directory exists
+    Path(cwd).mkdir(parents=True, exist_ok=True)
+
+    # Write prompt to prompt.md in the working directory
+    prompt_file = Path(cwd) / "prompt.md"
+    prompt_file.write_text(prompt)
+
+    # Build command (now references prompt.md)
+    cmd = build_claude_command(settings=settings, output_format="json")
 
     # Run command
     result = subprocess.run(
@@ -146,10 +154,22 @@ async def run_claude_async(
     """
     import asyncio
 
-    cmd = build_claude_command(prompt, settings=settings, output_format="json")
-
     # Determine working directory
     cwd = settings.get("working_directory") if settings else None
+
+    # If no working directory, create a temp one
+    if not cwd:
+        cwd = tempfile.mkdtemp(prefix="claude_prompt_")
+
+    # Ensure working directory exists
+    Path(cwd).mkdir(parents=True, exist_ok=True)
+
+    # Write prompt to prompt.md in the working directory
+    prompt_file = Path(cwd) / "prompt.md"
+    prompt_file.write_text(prompt)
+
+    # Build command (now references prompt.md)
+    cmd = build_claude_command(settings=settings, output_format="json")
 
     # Run command asynchronously with stdin explicitly closed
     process = await asyncio.create_subprocess_exec(
@@ -244,7 +264,6 @@ async def run_claude_with_prefill(
 
     # Build command for stream-json input/output
     cmd = build_claude_command(
-        prompt=None,
         settings=settings,
         input_format="stream-json",
         output_format="stream-json"
@@ -334,9 +353,22 @@ async def run_claude_with_jq_pipeline(
     except FileNotFoundError:
         raise RuntimeError("jq is not installed. Install with: sudo apt-get install jq")
 
-    # Run Claude CLI
-    cmd = build_claude_command(prompt, settings=settings, output_format="json")
+    # Determine working directory
     cwd = settings.get("working_directory") if settings else None
+
+    # If no working directory, create a temp one
+    if not cwd:
+        cwd = tempfile.mkdtemp(prefix="claude_prompt_")
+
+    # Ensure working directory exists
+    Path(cwd).mkdir(parents=True, exist_ok=True)
+
+    # Write prompt to prompt.md in the working directory
+    prompt_file = Path(cwd) / "prompt.md"
+    prompt_file.write_text(prompt)
+
+    # Run Claude CLI
+    cmd = build_claude_command(settings=settings, output_format="json")
 
     process = await asyncio.create_subprocess_exec(
         *cmd,

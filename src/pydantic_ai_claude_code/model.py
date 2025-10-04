@@ -236,9 +236,23 @@ Create the file now."""
             else:
                 settings["append_system_prompt"] = combined_prompt
 
-        # Build command for streaming
-        cmd = build_claude_command(prompt, settings=settings, output_format="stream-json")
+        # Get working directory
+        import tempfile
         cwd = settings.get("working_directory")
+
+        # If no working directory, create a temp one
+        if not cwd:
+            cwd = tempfile.mkdtemp(prefix="claude_prompt_")
+
+        # Ensure working directory exists
+        Path(cwd).mkdir(parents=True, exist_ok=True)
+
+        # Write prompt to prompt.md in the working directory
+        prompt_file = Path(cwd) / "prompt.md"
+        prompt_file.write_text(prompt)
+
+        # Build command for streaming
+        cmd = build_claude_command(settings=settings, output_format="stream-json")
 
         # Create event stream
         event_stream = run_claude_streaming(cmd, cwd=cwd)
