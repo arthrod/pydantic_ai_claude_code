@@ -2,13 +2,15 @@
 
 from __future__ import annotations as _annotations
 
+import json
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 from pydantic_ai.messages import (
     ModelMessage,
-    ModelRequest,
     ModelResponse,
     TextPart,
     ToolCallPart,
@@ -67,10 +69,66 @@ class ClaudeCodeModel(Model):
         """Get the system identifier."""
         return "claude-code"
 
+    def _build_structured_output_instruction(
+        self, output_tool: Any, settings: ClaudeCodeSettings
+    ) -> str:
+        """Build JSON instruction for structured output.
+
+        Args:
+            output_tool: The output tool definition
+            settings: Settings dict to store output file path
+
+        Returns:
+            JSON instruction string to append to system prompt
+        """
+        schema = output_tool.parameters_json_schema
+        properties = schema.get('properties', {})
+
+        # Build concrete example
+        example_obj = {}
+        for field, props in properties.items():
+            field_type = props.get('type', 'string')
+            if field_type == 'integer':
+                example_obj[field] = 42
+            elif field_type == 'number':
+                example_obj[field] = 3.14
+            elif field_type == 'boolean':
+                example_obj[field] = True
+            elif field_type == 'array':
+                example_obj[field] = ["item1", "item2"]
+            elif field_type == 'object':
+                example_obj[field] = {"key": "value"}
+            else:
+                example_obj[field] = "example value"
+
+        # Generate unique filename for structured output
+        output_filename = f"/tmp/claude_structured_output_{uuid.uuid4().hex}.json"
+        settings["__structured_output_file"] = output_filename
+
+        json_instruction = f"""CRITICAL: STRUCTURED OUTPUT MODE
+
+You must create a JSON file at: {output_filename}
+
+The JSON file MUST match this schema EXACTLY:
+{json.dumps(schema, indent=2)}
+
+Example valid JSON (use this structure):
+{json.dumps(example_obj, indent=2)}
+
+INSTRUCTIONS:
+1. Use the Write tool to create the file {output_filename}
+2. The file must contain ONLY valid JSON (no explanations, no markdown)
+3. The JSON must include ALL required fields: {list(properties.keys())}
+4. After creating the file, do NOT output anything else
+
+Create the file now."""
+
+        return json_instruction
+
     async def request(
         self,
         messages: list[ModelMessage],
-        model_settings: ModelSettings | None,
+        _model_settings: ModelSettings | None,
         model_request_parameters: ModelRequestParameters,
     ) -> ModelResponse:
         """Make an async request to Claude Code CLI.
@@ -108,53 +166,7 @@ class ClaudeCodeModel(Model):
 
         # If there are output tools (structured output), instruct Claude to return JSON
         if output_tools:
-            output_tool = output_tools[0]  # Get the first (and usually only) output tool
-            schema = output_tool.parameters_json_schema
-            import json
-
-            # Build concrete example
-            properties = schema.get('properties', {})
-            example_obj = {}
-            for field, props in properties.items():
-                field_type = props.get('type', 'string')
-                if field_type == 'integer':
-                    example_obj[field] = 42
-                elif field_type == 'number':
-                    example_obj[field] = 3.14
-                elif field_type == 'boolean':
-                    example_obj[field] = True
-                elif field_type == 'array':
-                    example_obj[field] = ["item1", "item2"]
-                elif field_type == 'object':
-                    example_obj[field] = {"key": "value"}
-                else:
-                    example_obj[field] = "example value"
-
-            # Create wrong example for single-field schemas
-            if len(properties) == 1:
-                field_name = list(properties.keys())[0]
-                wrong_example = f"WRONG: Just returning a value like: 7\nWRONG: Just returning a value like: \"hello\"\nCORRECT: Returning a JSON object like: {json.dumps(example_obj)}"
-            else:
-                wrong_example = f"WRONG: Returning a single value\nCORRECT: Returning a complete JSON object"
-
-            json_instruction = f"""CRITICAL: RESPOND WITH A JSON OBJECT ONLY.
-
-Schema (you MUST match this):
-{json.dumps(schema, indent=2)}
-
-{wrong_example}
-
-CORRECT response format (COPY THIS STRUCTURE):
-{json.dumps(example_obj, indent=2)}
-
-ABSOLUTELY REQUIRED:
-1. Your response MUST start with {{ and end with }}
-2. You MUST include ALL these fields: {list(properties.keys())}
-3. Even if there is only ONE field, you MUST wrap it in {{...}}
-4. Do NOT return bare values like 7 or "text"
-5. Do NOT add any text before or after the JSON
-6. The response must be valid JSON that can be parsed"""
-
+            json_instruction = self._build_structured_output_instruction(output_tools[0], settings)
             system_prompt_parts.append(json_instruction)
 
         if system_prompt_parts:
@@ -169,15 +181,15 @@ ABSOLUTELY REQUIRED:
         response = await run_claude_async(prompt, settings=settings)
 
         # Convert to ModelResponse with usage
-        return self._convert_response(response, output_tools=output_tools, function_tools=function_tools)
+        return self._convert_response(response, output_tools=output_tools, function_tools=function_tools, settings=settings)
 
     @asynccontextmanager
     async def request_stream(
         self,
         messages: list[ModelMessage],
-        model_settings: ModelSettings | None,
+        _model_settings: ModelSettings | None,
         model_request_parameters: ModelRequestParameters,
-        run_context: Any | None = None,
+        _run_context: Any | None = None,
     ) -> AsyncIterator[StreamedResponse]:
         """Make a streaming request to Claude Code CLI.
 
@@ -213,52 +225,7 @@ ABSOLUTELY REQUIRED:
             system_prompt_parts.append(tools_prompt)
 
         if output_tools:
-            output_tool = output_tools[0]
-            schema = output_tool.parameters_json_schema
-            import json
-
-            # Build concrete example
-            properties = schema.get('properties', {})
-            example_obj = {}
-            for field, props in properties.items():
-                field_type = props.get('type', 'string')
-                if field_type == 'integer':
-                    example_obj[field] = 42
-                elif field_type == 'number':
-                    example_obj[field] = 3.14
-                elif field_type == 'boolean':
-                    example_obj[field] = True
-                elif field_type == 'array':
-                    example_obj[field] = ["item1", "item2"]
-                elif field_type == 'object':
-                    example_obj[field] = {"key": "value"}
-                else:
-                    example_obj[field] = "example value"
-
-            # Create wrong example for single-field schemas
-            if len(properties) == 1:
-                field_name = list(properties.keys())[0]
-                wrong_example = f"WRONG: Just returning a value like: 7\nWRONG: Just returning a value like: \"hello\"\nCORRECT: Returning a JSON object like: {json.dumps(example_obj)}"
-            else:
-                wrong_example = f"WRONG: Returning a single value\nCORRECT: Returning a complete JSON object"
-
-            json_instruction = f"""CRITICAL: RESPOND WITH A JSON OBJECT ONLY.
-
-Schema (you MUST match this):
-{json.dumps(schema, indent=2)}
-
-{wrong_example}
-
-CORRECT response format (COPY THIS STRUCTURE):
-{json.dumps(example_obj, indent=2)}
-
-ABSOLUTELY REQUIRED:
-1. Your response MUST start with {{ and end with }}
-2. You MUST include ALL these fields: {list(properties.keys())}
-3. Even if there is only ONE field, you MUST wrap it in {{...}}
-4. Do NOT return bare values like 7 or "text"
-5. Do NOT add any text before or after the JSON
-6. The response must be valid JSON that can be parsed"""
+            json_instruction = self._build_structured_output_instruction(output_tools[0], settings)
             system_prompt_parts.append(json_instruction)
 
         if system_prompt_parts:
@@ -294,6 +261,7 @@ ABSOLUTELY REQUIRED:
         response: ClaudeJSONResponse,
         output_tools: list[Any] | None = None,
         function_tools: list[Any] | None = None,
+        settings: ClaudeCodeSettings | None = None,
     ) -> ModelResponse:
         """Convert Claude JSON response to ModelResponse.
 
@@ -301,13 +269,11 @@ ABSOLUTELY REQUIRED:
             response: Claude CLI JSON response
             output_tools: Optional output tool definitions for structured output
             function_tools: Optional function tool definitions for tool calling
+            settings: Settings that may contain structured output file path
 
         Returns:
             Pydantic AI ModelResponse with embedded usage
         """
-        import json
-        import uuid
-
         # Extract result text
         result_text = response.get("result", "")
 
@@ -333,30 +299,56 @@ ABSOLUTELY REQUIRED:
         if output_tools and len(output_tools) > 0:
             output_tool = output_tools[0]
             tool_name = output_tool.name
+            schema = output_tool.parameters_json_schema
 
             try:
-                # Try to parse the response as JSON
-                # Remove markdown code blocks if present
-                cleaned_text = result_text.strip()
-                if cleaned_text.startswith("```json"):
-                    cleaned_text = cleaned_text[7:]
-                if cleaned_text.startswith("```"):
-                    cleaned_text = cleaned_text[3:]
-                if cleaned_text.endswith("```"):
-                    cleaned_text = cleaned_text[:-3]
-                cleaned_text = cleaned_text.strip()
+                # Check if Claude created a structured output file
+                structured_file = settings.get("__structured_output_file") if settings else None
 
-                # Parse JSON
-                parsed_data = json.loads(cleaned_text)
+                if structured_file:
+                    parsed_data, error_msg = self._read_structured_output_file(structured_file, schema)
 
-                # Create a tool call with the parsed data
-                parts.append(
-                    ToolCallPart(
-                        tool_name=tool_name,
-                        args=parsed_data,
-                        tool_call_id=f"call_{uuid.uuid4().hex[:16]}",
+                    if error_msg:
+                        # Return error as text so Pydantic AI can retry
+                        parts.append(TextPart(content=error_msg))
+                        model_name = self._get_model_name(response)
+                        usage = self._create_usage(response)
+                        return ModelResponse(
+                            parts=parts,
+                            model_name=model_name,
+                            timestamp=datetime.now(timezone.utc),
+                            usage=usage,
+                        )
+
+                    if parsed_data:
+                        # Validation passed, create tool call
+                        parts.append(
+                            ToolCallPart(
+                                tool_name=tool_name,
+                                args=parsed_data,
+                                tool_call_id=f"call_{uuid.uuid4().hex[:16]}",
+                            )
+                        )
+                    else:
+                        # No file found, use fallback extraction
+                        parsed_data = self._extract_json_robust(result_text, schema)
+                        parts.append(
+                            ToolCallPart(
+                                tool_name=tool_name,
+                                args=parsed_data,
+                                tool_call_id=f"call_{uuid.uuid4().hex[:16]}",
+                            )
+                        )
+                else:
+                    # Fallback: Use robust extraction with multiple strategies
+                    parsed_data = self._extract_json_robust(result_text, schema)
+                    parts.append(
+                        ToolCallPart(
+                            tool_name=tool_name,
+                            args=parsed_data,
+                            tool_call_id=f"call_{uuid.uuid4().hex[:16]}",
+                        )
                     )
-                )
             except json.JSONDecodeError:
                 # If JSON parsing fails, return as text
                 # Pydantic AI will retry with validation error
@@ -375,6 +367,224 @@ ABSOLUTELY REQUIRED:
             timestamp=datetime.now(timezone.utc),
             usage=usage,
         )
+
+    def _cleanup_temp_file(self, file_path: str | Path) -> None:
+        """Safely remove temporary file.
+
+        Args:
+            file_path: Path to file to remove
+        """
+        try:
+            Path(file_path).unlink()
+        except Exception:
+            pass
+
+    def _validate_json_schema(self, data: dict, schema: dict) -> str | None:
+        """Validate JSON data against schema.
+
+        Args:
+            data: JSON data to validate
+            schema: JSON schema to validate against
+
+        Returns:
+            Error message if validation fails, None if valid
+        """
+        # Check required fields
+        required_fields = schema.get('required', [])
+        missing_fields = [field for field in required_fields if field not in data]
+
+        if missing_fields:
+            return f"Missing required fields: {missing_fields}\nReceived data: {json.dumps(data)}"
+
+        # Validate field types
+        properties = schema.get('properties', {})
+        for field_name, field_schema in properties.items():
+            if field_name in data:
+                expected_type = field_schema.get('type')
+                actual_value = data[field_name]
+
+                # Type checking
+                type_valid = True
+                if expected_type == 'string' and not isinstance(actual_value, str):
+                    type_valid = False
+                elif expected_type == 'integer' and not isinstance(actual_value, int):
+                    type_valid = False
+                elif expected_type == 'number' and not isinstance(actual_value, (int, float)):
+                    type_valid = False
+                elif expected_type == 'boolean' and not isinstance(actual_value, bool):
+                    type_valid = False
+                elif expected_type == 'array' and not isinstance(actual_value, list):
+                    type_valid = False
+                elif expected_type == 'object' and not isinstance(actual_value, dict):
+                    type_valid = False
+
+                if not type_valid:
+                    return f"Field '{field_name}' has wrong type. Expected {expected_type}, got {type(actual_value).__name__}\nReceived data: {json.dumps(data)}"
+
+        return None
+
+    def _read_structured_output_file(
+        self, file_path: str, schema: dict
+    ) -> tuple[dict | None, str | None]:
+        """Read and validate structured output file.
+
+        Args:
+            file_path: Path to structured output file
+            schema: JSON schema to validate against
+
+        Returns:
+            Tuple of (parsed_data, error_message). One will be None.
+        """
+        if not Path(file_path).exists():
+            return None, None
+
+        # Read file
+        try:
+            with open(file_path, 'r') as f:
+                file_content = f.read()
+        except Exception as e:
+            self._cleanup_temp_file(file_path)
+            return None, f"Failed to read file: {e}"
+
+        # Parse JSON
+        try:
+            parsed_data = json.loads(file_content)
+        except json.JSONDecodeError as e:
+            self._cleanup_temp_file(file_path)
+            return None, f"Invalid JSON in file: {e}\nFile content:\n{file_content}"
+
+        # Validate schema
+        validation_error = self._validate_json_schema(parsed_data, schema)
+        if validation_error:
+            self._cleanup_temp_file(file_path)
+            return None, validation_error
+
+        # Validation passed - clean up file
+        self._cleanup_temp_file(file_path)
+        return parsed_data, None
+
+    def _extract_json_robust(self, text: str, schema: dict) -> dict:
+        """Extract JSON from text using multiple robust strategies.
+
+        Args:
+            text: Raw text that may contain JSON
+            schema: JSON schema for the expected structure
+
+        Returns:
+            Extracted JSON as dict
+
+        Raises:
+            json.JSONDecodeError: If JSON cannot be extracted
+        """
+        import json
+        import re
+
+        # Strategy 1: Strip markdown code blocks and parse
+        cleaned = text.strip()
+
+        # Remove markdown code blocks (```json or ```)
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        elif cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+
+        cleaned = cleaned.strip()
+
+        # Try parsing cleaned text
+        try:
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+        # Strategy 2: Extract JSON using regex
+        # Match { ... } objects (handles nested braces)
+        json_pattern = r'\{(?:[^{}]|\{[^{}]*\})*\}'
+        matches = re.findall(json_pattern, text, re.DOTALL)
+
+        for match in matches:
+            try:
+                parsed = json.loads(match)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                continue
+
+        # Strategy 3: Extract JSON array using regex
+        array_pattern = r'\[(?:[^\[\]]|\[[^\[\]]*\])*\]'
+        array_matches = re.findall(array_pattern, text, re.DOTALL)
+
+        for match in array_matches:
+            try:
+                parsed = json.loads(match)
+                if isinstance(parsed, list):
+                    # If single-field schema expects array, wrap it
+                    properties = schema.get('properties', {})
+                    if len(properties) == 1:
+                        field_name = list(properties.keys())[0]
+                        return {field_name: parsed}
+                    # For multi-field schemas, can't use bare array
+                    continue
+            except json.JSONDecodeError:
+                continue
+
+        # Strategy 4: For single-field schemas, try to auto-wrap values
+        properties = schema.get('properties', {})
+        if len(properties) == 1:
+            field_name = list(properties.keys())[0]
+            field_type = properties[field_name].get('type')
+
+            # Try parsing as JSON first (could be array/object)
+            try:
+                parsed_value = json.loads(cleaned)
+                if field_type == 'array' and isinstance(parsed_value, list):
+                    return {field_name: parsed_value}
+                elif field_type == 'object' and isinstance(parsed_value, dict):
+                    return {field_name: parsed_value}
+            except json.JSONDecodeError:
+                pass
+
+            # Handle comma-separated lists for arrays
+            if field_type == 'array':
+                value = cleaned.strip()
+                # Try parsing as comma-separated list
+                if ',' in value or ' and ' in value or ' or ' in value:
+                    # Replace common separators
+                    value = value.replace(' and ', ',').replace(' or ', ',')
+                    items = [item.strip().strip('"\'') for item in value.split(',')]
+                    items = [item for item in items if item]
+                    if items:
+                        return {field_name: items}
+
+            # Try primitive value wrapping
+            value = cleaned.strip()
+
+            # Remove quotes
+            if value.startswith('"') and value.endswith('"'):
+                value = value[1:-1]
+            elif value.startswith("'") and value.endswith("'"):
+                value = value[1:-1]
+
+            # Type conversion
+            try:
+                if field_type == 'integer':
+                    return {field_name: int(value)}
+                elif field_type == 'number':
+                    return {field_name: float(value)}
+                elif field_type == 'boolean':
+                    bool_val = value.lower() in ('true', '1', 'yes')
+                    return {field_name: bool_val}
+                elif field_type == 'string':
+                    return {field_name: value}
+            except (ValueError, AttributeError):
+                pass
+
+        # If all strategies fail, raise error
+        raise json.JSONDecodeError("Could not extract valid JSON from response", text, 0)
 
     def _get_model_name(self, response: ClaudeJSONResponse) -> str:
         """Extract model name from Claude response.

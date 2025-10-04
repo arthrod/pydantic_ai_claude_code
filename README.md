@@ -177,6 +177,7 @@ See the `examples/` directory for more demonstrations:
 
 - `basic_example.py` - Simple queries and usage tracking
 - `structured_example.py` - Structured output with Pydantic models
+- `async_example.py` - Async/await usage patterns
 - `advanced_example.py` - Custom provider configurations
 - `tools_and_streaming.py` - Custom tools and streaming responses
 

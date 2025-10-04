@@ -109,3 +109,4 @@ class ClaudeCodeSettings(TypedDict, total=False):
     session_id: str | None
     verbose: bool
     dangerously_skip_permissions: bool
+    __structured_output_file: str  # Internal: temp file path for structured output

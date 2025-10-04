@@ -1,7 +1,6 @@
 """Utility functions for Claude Code model."""
 
 import json
-import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -204,3 +203,200 @@ def parse_stream_json_line(line: str) -> ClaudeStreamEvent | None:
         return json.loads(line)
     except json.JSONDecodeError:
         return None
+
+
+async def run_claude_with_prefill(
+    prompt: str,
+    prefill_text: str = "{",
+    *,
+    settings: ClaudeCodeSettings | None = None,
+) -> ClaudeJSONResponse:
+    """Run Claude CLI with assistant response prefilling to force JSON output.
+
+    Args:
+        prompt: The user prompt
+        prefill_text: Text to prefill assistant response with (default: "{")
+        settings: Optional settings
+
+    Returns:
+        Claude JSON response
+    """
+    import asyncio
+    import uuid
+
+    session_id = str(uuid.uuid4())
+
+    # Build messages with user prompt and assistant prefill
+    messages = [
+        {
+            "type": "user",
+            "message": {"role": "user", "content": prompt},
+            "session_id": session_id,
+            "parent_tool_use_id": None
+        },
+        {
+            "type": "assistant",
+            "message": {"role": "assistant", "content": prefill_text},
+            "session_id": session_id,
+            "parent_tool_use_id": None
+        }
+    ]
+
+    # Build command for stream-json input/output
+    cmd = build_claude_command(
+        prompt=None,
+        settings=settings,
+        input_format="stream-json",
+        output_format="stream-json"
+    )
+
+    cwd = settings.get("working_directory") if settings else None
+
+    # Prepare input (newline-delimited JSON)
+    input_data = "\n".join(json.dumps(msg) for msg in messages) + "\n"
+
+    # Run command
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=cwd,
+    )
+
+    stdout, stderr = await process.communicate(input=input_data.encode())
+
+    if process.returncode != 0:
+        raise RuntimeError(f"Claude CLI error: {stderr.decode()}")
+
+    # Parse stream-json output to extract final result
+    lines = stdout.decode().strip().split('\n')
+    result_text = None
+
+    for line in lines:
+        event = parse_stream_json_line(line)
+        if event and event.get('type') == 'result':
+            result_text = event.get('result', '')
+            # Return the result event as ClaudeJSONResponse
+            return event
+        elif event and event.get('type') == 'assistant':
+            # Extract text from assistant message
+            msg = event.get('message', {})
+            content = msg.get('content', [])
+            for part in content:
+                if isinstance(part, dict) and part.get('type') == 'text':
+                    result_text = part.get('text', '')
+
+    # Fallback: construct response from accumulated text
+    if result_text:
+        return {
+            'result': result_text,
+            'is_error': False,
+            'usage': {},
+            'total_cost_usd': 0.0
+        }
+
+    raise RuntimeError("No result found in stream-json output")
+
+
+async def run_claude_with_jq_pipeline(
+    prompt: str,
+    *,
+    settings: ClaudeCodeSettings | None = None,
+) -> ClaudeJSONResponse:
+    """Run Claude CLI and extract JSON using jq pipeline for robustness.
+
+    This uses jq to aggressively extract JSON from Claude's response,
+    handling markdown blocks, mixed text, and other edge cases.
+
+    Args:
+        prompt: The user prompt
+        settings: Optional settings
+
+    Returns:
+        Claude JSON response with cleaned result
+
+    Raises:
+        RuntimeError: If jq is not available or JSON extraction fails
+    """
+    import asyncio
+
+    # First check if jq is available
+    try:
+        jq_check = await asyncio.create_subprocess_exec(
+            "which", "jq",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        await jq_check.communicate()
+        if jq_check.returncode != 0:
+            raise RuntimeError("jq is not installed. Install with: sudo apt-get install jq")
+    except FileNotFoundError:
+        raise RuntimeError("jq is not installed. Install with: sudo apt-get install jq")
+
+    # Run Claude CLI
+    cmd = build_claude_command(prompt, settings=settings, output_format="json")
+    cwd = settings.get("working_directory") if settings else None
+
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        stdin=asyncio.subprocess.DEVNULL,
+        cwd=cwd,
+    )
+
+    stdout, stderr = await process.communicate()
+
+    if process.returncode != 0:
+        raise RuntimeError(f"Claude CLI error: {stderr.decode()}")
+
+    response: ClaudeJSONResponse = json.loads(stdout.decode())
+
+    if response.get("is_error"):
+        error_msg = response.get("error", "Unknown error")
+        raise RuntimeError(f"Claude CLI error: {error_msg}")
+
+    result_text = response.get("result", "")
+
+    # Use jq pipeline to extract JSON
+    # Strategy: Try multiple jq filters in order of preference
+    jq_filters = [
+        # 1. Try parsing directly
+        '.',
+        # 2. Remove markdown code blocks and parse
+        'gsub("```json\\n"; "") | gsub("\\n```"; "") | gsub("```"; "") | fromjson',
+        # 3. Extract first JSON object
+        'match("\\{[^}]+\\}") | .string | fromjson',
+        # 4. Extract from array of matches
+        '[match("\\{[^}]+\\}"; "g")] | .[0].string | fromjson',
+    ]
+
+    cleaned_result = None
+
+    for jq_filter in jq_filters:
+        try:
+            # Use jq to process
+            jq_process = await asyncio.create_subprocess_exec(
+                "jq", "-r", jq_filter,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            jq_stdout, jq_stderr = await jq_process.communicate(input=result_text.encode())
+
+            if jq_process.returncode == 0:
+                cleaned_result = jq_stdout.decode().strip()
+                # Verify it's valid JSON
+                json.loads(cleaned_result)
+                break
+        except (json.JSONDecodeError, Exception):
+            continue
+
+    if cleaned_result:
+        response["result"] = cleaned_result
+        return response
+
+    # If all jq strategies fail, return original
+    return response

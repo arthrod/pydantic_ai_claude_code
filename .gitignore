@@ -15,3 +15,8 @@ wheels/
 .env
 .env.*
 secrets/
+
+# Test artifacts
+report.md
+*.test.json
+/tmp/
