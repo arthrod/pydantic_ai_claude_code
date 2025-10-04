@@ -1,0 +1,117 @@
+"""Message conversion utilities for Claude Code model."""
+
+from typing import Any
+
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    SystemPromptPart,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
+
+
+def format_messages_for_claude(messages: list[ModelMessage]) -> str:
+    """Convert Pydantic AI messages to a prompt string for Claude CLI.
+
+    Args:
+        messages: List of Pydantic AI messages
+
+    Returns:
+        Formatted prompt string
+    """
+    parts: list[str] = []
+
+    for message in messages:
+        if isinstance(message, ModelRequest):
+            for part in message.parts:
+                if isinstance(part, SystemPromptPart):
+                    # System prompts are prepended
+                    parts.insert(0, f"System: {part.content}")
+                elif isinstance(part, UserPromptPart):
+                    parts.append(f"User: {part.content}")
+                elif isinstance(part, ToolReturnPart):
+                    # Tool returns are formatted as context
+                    parts.append(f"Tool Result ({part.tool_name}): {part.content}")
+
+        elif isinstance(message, ModelResponse):
+            for part in message.parts:
+                if isinstance(part, TextPart):
+                    parts.append(f"Assistant: {part.content}")
+                elif isinstance(part, ToolCallPart):
+                    # Skip output tool calls (like final_result) - these are internal to Pydantic AI
+                    # and confuse Claude if included in the conversation
+                    if part.tool_name not in ("final_result",):
+                        # Only include actual function/tool calls, not output formatting
+                        if isinstance(part.args, dict):
+                            args_str = ", ".join(f"{k}={v}" for k, v in part.args.items())
+                        elif isinstance(part.args, str):
+                            # args might be a JSON string, try to parse it
+                            try:
+                                import json
+                                args_dict = json.loads(part.args)
+                                args_str = ", ".join(f"{k}={v}" for k, v in args_dict.items())
+                            except (json.JSONDecodeError, AttributeError):
+                                args_str = part.args
+                        else:
+                            args_str = str(part.args)
+                        parts.append(f"Tool Call: {part.tool_name}({args_str})")
+
+    return "\n\n".join(parts)
+
+
+def extract_text_from_response(response_text: str) -> str:
+    """Extract the main text response from Claude's output.
+
+    Args:
+        response_text: Raw response text from Claude CLI
+
+    Returns:
+        Cleaned response text
+    """
+    # Remove any "Assistant:" prefix if present
+    if response_text.startswith("Assistant: "):
+        return response_text[len("Assistant: ") :]
+
+    return response_text
+
+
+def build_conversation_context(messages: list[ModelMessage]) -> dict[str, Any]:
+    """Build conversation context from message history.
+
+    Args:
+        messages: List of Pydantic AI messages
+
+    Returns:
+        Dictionary containing conversation metadata
+    """
+    context = {
+        "num_messages": len(messages),
+        "has_system_prompt": False,
+        "num_user_messages": 0,
+        "num_assistant_messages": 0,
+        "num_tool_calls": 0,
+        "num_tool_returns": 0,
+    }
+
+    for message in messages:
+        if isinstance(message, ModelRequest):
+            for part in message.parts:
+                if isinstance(part, SystemPromptPart):
+                    context["has_system_prompt"] = True
+                elif isinstance(part, UserPromptPart):
+                    context["num_user_messages"] += 1
+                elif isinstance(part, ToolReturnPart):
+                    context["num_tool_returns"] += 1
+
+        elif isinstance(message, ModelResponse):
+            for part in message.parts:
+                if isinstance(part, TextPart):
+                    context["num_assistant_messages"] += 1
+                elif isinstance(part, ToolCallPart):
+                    context["num_tool_calls"] += 1
+
+    return context
