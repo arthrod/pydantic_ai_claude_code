@@ -73,33 +73,73 @@ def parse_tool_calls(response_text: str) -> list[ToolCallPart] | None:
     Returns:
         List of ToolCallPart objects if tool calls detected, None otherwise
     """
-    # Clean up response text
+    import re
+
+    # Strategy 1: Try parsing the whole response directly (handle simple cases)
     cleaned = response_text.strip()
 
-    # Remove markdown code blocks if present
+    # Remove markdown code blocks if present at start/end
     if cleaned.startswith("```json"):
         cleaned = cleaned[7:]
-    if cleaned.startswith("```"):
+    elif cleaned.startswith("```"):
         cleaned = cleaned[3:]
+
     if cleaned.endswith("```"):
         cleaned = cleaned[:-3]
     cleaned = cleaned.strip()
 
-    # Try to parse as JSON
+    # Try to parse as JSON directly
     try:
         data = json.loads(cleaned)
+        if isinstance(data, dict) and data.get("type") == "tool_calls":
+            calls = data.get("calls", [])
+            if isinstance(calls, list) and calls:
+                return _convert_to_tool_call_parts(calls)
     except json.JSONDecodeError:
-        return None
+        pass
 
-    # Check if it's a tool calls response
-    if not isinstance(data, dict) or data.get("type") != "tool_calls":
-        return None
+    # Strategy 2: Extract JSON from markdown code blocks anywhere in text
+    # Match ```json ... ``` or ``` ... ```
+    code_block_pattern = r'```(?:json)?\s*(\{.*?\})\s*```'
+    matches = re.findall(code_block_pattern, response_text, re.DOTALL)
 
-    calls = data.get("calls", [])
-    if not isinstance(calls, list) or not calls:
-        return None
+    for match in matches:
+        try:
+            data = json.loads(match)
+            if isinstance(data, dict) and data.get("type") == "tool_calls":
+                calls = data.get("calls", [])
+                if isinstance(calls, list) and calls:
+                    return _convert_to_tool_call_parts(calls)
+        except json.JSONDecodeError:
+            continue
 
-    # Convert to ToolCallPart objects
+    # Strategy 3: Extract JSON objects from anywhere in text using regex
+    # Match { ... } objects (handles nested braces)
+    json_pattern = r'\{(?:[^{}]|\{[^{}]*\})*\}'
+    matches = re.findall(json_pattern, response_text, re.DOTALL)
+
+    for match in matches:
+        try:
+            data = json.loads(match)
+            if isinstance(data, dict) and data.get("type") == "tool_calls":
+                calls = data.get("calls", [])
+                if isinstance(calls, list) and calls:
+                    return _convert_to_tool_call_parts(calls)
+        except json.JSONDecodeError:
+            continue
+
+    return None
+
+
+def _convert_to_tool_call_parts(calls: list) -> list[ToolCallPart] | None:
+    """Convert call dicts to ToolCallPart objects.
+
+    Args:
+        calls: List of call dictionaries
+
+    Returns:
+        List of ToolCallPart objects or None if invalid
+    """
     tool_call_parts = []
     for call in calls:
         if not isinstance(call, dict):
