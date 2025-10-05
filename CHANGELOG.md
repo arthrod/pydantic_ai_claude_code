@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2025-10-05
+
+### Fixed
+- **Argument list size limit**: Fixed system's argument list limit (~128KB) being exceeded when using large JSON schemas for structured output or function calling
+  - System prompts (including JSON schemas) are now written to prompt.md file instead of being passed as CLI arguments
+  - This allows unlimited schema sizes without hitting OS argument length limits
+  - Applies to both structured output schemas and function tool definitions
+  - User-specified `append_system_prompt` settings are also written to prompt.md to avoid duplication
+
 ## [0.5.1] - 2025-10-05
 
 ### Fixed

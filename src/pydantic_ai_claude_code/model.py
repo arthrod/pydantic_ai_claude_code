@@ -297,15 +297,21 @@ CRITICAL: Write ONLY valid JSON to the file. After creating the file, do NOT out
             )
             system_prompt_parts.append(unstructured_instruction)
 
+        # Build complete prompt with system instructions
+        # Write to prompt.md instead of CLI args to avoid argument list size limit
         if system_prompt_parts:
-            combined_prompt = "\n\n".join(system_prompt_parts)
-            existing_prompt = settings.get("append_system_prompt")
-            if existing_prompt:
-                settings["append_system_prompt"] = (
-                    f"{existing_prompt}\n\n{combined_prompt}"
-                )
-            else:
-                settings["append_system_prompt"] = combined_prompt
+            combined_system_prompt = "\n\n".join(system_prompt_parts)
+            # Prepend system prompt to the conversation prompt
+            prompt = f"{combined_system_prompt}\n\n{prompt}"
+            logger.debug("Added %d chars of system instructions to prompt", len(combined_system_prompt))
+
+        # Also include any user-specified append_system_prompt in the prompt file
+        existing_prompt = settings.get("append_system_prompt")
+        if existing_prompt:
+            prompt = f"{existing_prompt}\n\n{prompt}"
+            # Remove from settings so it's not duplicated as CLI arg
+            settings.pop("append_system_prompt", None)
+            logger.debug("Added %d chars of user system prompt to prompt file", len(existing_prompt))
 
         # Run Claude CLI
         response = await run_claude_async(prompt, settings=settings)
@@ -403,15 +409,21 @@ CRITICAL: Write ONLY valid JSON to the file. After creating the file, do NOT out
             )
             system_prompt_parts.append(unstructured_instruction)
 
+        # Build complete prompt with system instructions
+        # Write to prompt.md instead of CLI args to avoid argument list size limit
         if system_prompt_parts:
-            combined_prompt = "\n\n".join(system_prompt_parts)
-            existing_prompt = settings.get("append_system_prompt")
-            if existing_prompt:
-                settings["append_system_prompt"] = (
-                    f"{existing_prompt}\n\n{combined_prompt}"
-                )
-            else:
-                settings["append_system_prompt"] = combined_prompt
+            combined_system_prompt = "\n\n".join(system_prompt_parts)
+            # Prepend system prompt to the conversation prompt
+            prompt = f"{combined_system_prompt}\n\n{prompt}"
+            logger.debug("Added %d chars of system instructions to prompt", len(combined_system_prompt))
+
+        # Also include any user-specified append_system_prompt in the prompt file
+        existing_prompt = settings.get("append_system_prompt")
+        if existing_prompt:
+            prompt = f"{existing_prompt}\n\n{prompt}"
+            # Remove from settings so it's not duplicated as CLI arg
+            settings.pop("append_system_prompt", None)
+            logger.debug("Added %d chars of user system prompt to prompt file", len(existing_prompt))
 
         # Get working directory
         import tempfile
