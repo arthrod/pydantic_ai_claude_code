@@ -170,11 +170,36 @@ All tests use `pytest` and `pytest-asyncio`. Tests make real calls to the local 
 - **pydantic**: >=2.11.9 (for Pydantic models)
 - **Claude Code CLI**: Must be installed separately (see claude.com/claude-code)
 
+## Logging
+
+The package uses Python's standard logging module with loggers namespaced under `pydantic_ai_claude_code`:
+
+- `pydantic_ai_claude_code.provider` - Provider initialization and settings
+- `pydantic_ai_claude_code.model` - Model requests and response conversion
+- `pydantic_ai_claude_code.utils` - CLI command building and execution
+- `pydantic_ai_claude_code.streaming` - Streaming event processing
+- `pydantic_ai_claude_code.messages` - Message formatting
+- `pydantic_ai_claude_code.tools` - Tool formatting and parsing
+- `pydantic_ai_claude_code.registration` - Model provider registration
+
+By default, no logging is output (NullHandler). To enable logging:
+
+```python
+import logging
+logging.getLogger('pydantic_ai_claude_code').setLevel(logging.DEBUG)
+```
+
+Log levels used:
+- **DEBUG**: Detailed information for diagnosing problems (command execution, file operations, parsing)
+- **INFO**: Confirmation that things are working (requests starting, CLI execution, registration)
+- **WARNING**: Indication of potential issues (fallback strategies, missing files)
+- **ERROR**: Serious problems (CLI failures, validation errors, parsing failures)
+
 ## Common Debugging Tips
 
 1. **Check CLI availability**: Run `claude --version` to ensure CLI is installed
 2. **Test CLI directly**: Run `claude --print --output-format json "What is 2+2?"` to verify CLI works
-3. **Enable verbose mode**: Set `verbose=True` in `ClaudeCodeProvider` to see CLI output
+3. **Enable debug logging**: Use `logging.getLogger('pydantic_ai_claude_code').setLevel(logging.DEBUG)` to see detailed execution
 4. **Check prompt files**: Prompts are written to `/tmp/claude_prompt_*/prompt.md` - examine these to verify prompt formatting
 5. **Check output files**:
    - Unstructured output: `/tmp/claude_unstructured_output_*.txt`

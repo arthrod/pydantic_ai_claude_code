@@ -1,5 +1,6 @@
 """Custom StreamedResponse implementation for Claude Code model."""
 
+import logging
 from datetime import datetime, timezone
 from typing import AsyncIterator
 
@@ -15,6 +16,8 @@ from pydantic_ai.models import ModelRequestParameters, StreamedResponse
 from pydantic_ai.usage import RequestUsage
 
 from .types import ClaudeStreamEvent
+
+logger = logging.getLogger(__name__)
 
 
 class ClaudeCodeStreamedResponse(StreamedResponse):
@@ -62,10 +65,13 @@ class ClaudeCodeStreamedResponse(StreamedResponse):
         Yields:
             Model response stream events
         """
+        logger.debug("Starting streamed response event iteration")
         text_started = False
         full_text = ""
+        event_count = 0
 
         async for event in self._event_stream:
+            event_count += 1
             event_type = event.get("type")
 
             if event_type == "assistant":
@@ -80,6 +86,7 @@ class ClaudeCodeStreamedResponse(StreamedResponse):
                         if not text_started:
                             # First chunk - send PartStartEvent
                             text_started = True
+                            logger.debug("Streaming first text chunk: %d chars", len(text))
                             yield PartStartEvent(
                                 index=0,
                                 part=TextPart(content=text),
@@ -89,6 +96,7 @@ class ClaudeCodeStreamedResponse(StreamedResponse):
                             # Subsequent chunks - send delta
                             delta = text[len(full_text):]
                             if delta:
+                                logger.debug("Streaming text delta: %d chars", len(delta))
                                 yield PartDeltaEvent(
                                     index=0,
                                     delta=TextPartDelta(content_delta=delta),
@@ -106,4 +114,9 @@ class ClaudeCodeStreamedResponse(StreamedResponse):
                     output_tokens=usage_data.get("output_tokens", 0),
                 )
 
+                logger.debug(
+                    "Streaming completed: %d events, %d output tokens",
+                    event_count,
+                    self._usage.output_tokens if self._usage else 0
+                )
                 yield FinalResultEvent(tool_name=None, tool_call_id=None)

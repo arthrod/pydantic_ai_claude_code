@@ -1,11 +1,14 @@
 """Provider for Claude Code CLI model."""
 
+import logging
 import os
 import tempfile
 from pathlib import Path
 from typing import Any
 
 from .types import ClaudeCodeSettings
+
+logger = logging.getLogger(__name__)
 
 
 class ClaudeCodeProvider:
@@ -60,11 +63,18 @@ class ClaudeCodeProvider:
         self.use_temp_workspace = use_temp_workspace
         self._temp_dir: Path | None = None
 
+        logger.debug(
+            "Initialized ClaudeCodeProvider with model=%s, working_directory=%s, "
+            "use_temp_workspace=%s, dangerously_skip_permissions=%s",
+            model, working_directory, use_temp_workspace, dangerously_skip_permissions
+        )
+
     def __enter__(self):
         """Context manager entry - creates temp directory if needed."""
         if self.use_temp_workspace and self.working_directory is None:
             self._temp_dir = Path(tempfile.mkdtemp(prefix="claude_code_"))
             self.working_directory = self._temp_dir
+            logger.debug("Created temporary workspace: %s", self._temp_dir)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -72,6 +82,7 @@ class ClaudeCodeProvider:
         if self._temp_dir and self._temp_dir.exists():
             import shutil
 
+            logger.debug("Cleaning up temporary workspace: %s", self._temp_dir)
             shutil.rmtree(self._temp_dir, ignore_errors=True)
             self._temp_dir = None
 
@@ -109,4 +120,9 @@ class ClaudeCodeProvider:
         settings.update(overrides)  # type: ignore
 
         # Remove None values
-        return {k: v for k, v in settings.items() if v is not None}  # type: ignore
+        final_settings = {k: v for k, v in settings.items() if v is not None}  # type: ignore
+
+        if overrides:
+            logger.debug("Generated settings with overrides: %s", overrides)
+
+        return final_settings

@@ -1,10 +1,13 @@
 """Registration of Claude Code model with Pydantic AI."""
 
+import logging
 import warnings
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pydantic_ai.models import Model
+
+logger = logging.getLogger(__name__)
 
 
 def register_claude_code_model() -> None:
@@ -37,6 +40,7 @@ def register_claude_code_model() -> None:
                     if provider == "claude-code":
                         from .model import ClaudeCodeModel
 
+                        logger.debug("Creating ClaudeCodeModel for model: %s", model_name)
                         return ClaudeCodeModel(model_name)
                 except ValueError:
                     # Not a provider:model format, fall through to original
@@ -47,9 +51,11 @@ def register_claude_code_model() -> None:
 
         # Replace the function
         models.infer_model = _patched_infer_model
+        logger.info("Successfully registered claude-code model provider with Pydantic AI")
 
-    except ImportError:
+    except ImportError as e:
         # pydantic_ai not installed, skip registration
+        logger.warning("Failed to register claude-code provider: %s", e)
         warnings.warn(
             "pydantic_ai not found - claude-code provider not registered. "
             "Install pydantic-ai to use 'claude-code:model' strings.",

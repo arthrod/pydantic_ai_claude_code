@@ -3,6 +3,7 @@
 from __future__ import annotations as _annotations
 
 import json
+import logging
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -30,6 +31,8 @@ from .streaming import run_claude_streaming
 from .tools import format_tools_for_prompt, parse_tool_calls
 from .types import ClaudeCodeSettings, ClaudeJSONResponse
 from .utils import build_claude_command, run_claude_async
+
+logger = logging.getLogger(__name__)
 
 
 class ClaudeCodeModel(Model):
@@ -59,6 +62,8 @@ class ClaudeCodeModel(Model):
         self._model_name = model_name
         self.provider = provider or ClaudeCodeProvider()
 
+        logger.debug("Initialized ClaudeCodeModel with model_name=%s", model_name)
+
     @property
     def model_name(self) -> str:
         """Get the model name."""
@@ -83,6 +88,8 @@ class ClaudeCodeModel(Model):
         # Generate unique filename for unstructured output
         output_filename = f"/tmp/claude_unstructured_output_{uuid.uuid4().hex}.txt"
         settings["__unstructured_output_file"] = output_filename
+
+        logger.debug("Unstructured output file path: %s", output_filename)
 
         instruction = f"""IMPORTANT: OUTPUT FILE INSTRUCTION
 
@@ -134,6 +141,8 @@ Complete this task now."""
         output_filename = f"/tmp/claude_structured_output_{uuid.uuid4().hex}.json"
         settings["__structured_output_file"] = output_filename
 
+        logger.debug("Structured output file path: %s", output_filename)
+
         json_instruction = f"""CRITICAL: STRUCTURED OUTPUT MODE
 
 You must create a JSON file at: {output_filename}
@@ -170,6 +179,13 @@ Create the file now."""
         Returns:
             Model response with embedded usage information
         """
+        logger.info(
+            "Starting non-streaming request with %d messages, output_tools=%s, function_tools=%s",
+            len(messages),
+            len(model_request_parameters.output_tools) if model_request_parameters and model_request_parameters.output_tools else 0,
+            len(model_request_parameters.function_tools) if model_request_parameters and model_request_parameters.function_tools else 0
+        )
+
         # Format messages into a prompt
         prompt = format_messages_for_claude(messages)
 
@@ -179,6 +195,8 @@ Create the file now."""
         # Check if we need structured output or function tools
         output_tools = model_request_parameters.output_tools if model_request_parameters else []
         function_tools = model_request_parameters.function_tools if model_request_parameters else []
+
+        logger.debug("Formatted prompt length: %d chars", len(prompt))
 
         # Build system prompt
         system_prompt_parts = []
@@ -235,6 +253,13 @@ Create the file now."""
         Yields:
             Streamed response object
         """
+        logger.info(
+            "Starting streaming request with %d messages, output_tools=%s, function_tools=%s",
+            len(messages),
+            len(model_request_parameters.output_tools) if model_request_parameters and model_request_parameters.output_tools else 0,
+            len(model_request_parameters.function_tools) if model_request_parameters and model_request_parameters.function_tools else 0
+        )
+
         # Format messages into a prompt
         prompt = format_messages_for_claude(messages)
 
@@ -335,6 +360,7 @@ Create the file now."""
         if function_tools:
             tool_calls = parse_tool_calls(result_text)
             if tool_calls:
+                logger.debug("Parsed %d tool calls from response", len(tool_calls))
                 parts.extend(tool_calls)
                 # Create usage info and return early
                 usage = self._create_usage(response)
@@ -345,6 +371,8 @@ Create the file now."""
                     timestamp=datetime.now(timezone.utc),
                     usage=usage,
                 )
+            else:
+                logger.debug("No tool calls found in response despite function_tools being provided")
 
         # Check if we need to return structured output via tool call
         if output_tools and len(output_tools) > 0:
@@ -373,6 +401,7 @@ Create the file now."""
 
                     if parsed_data:
                         # Validation passed, create tool call
+                        logger.debug("Successfully created structured output from file")
                         parts.append(
                             ToolCallPart(
                                 tool_name=tool_name,
@@ -382,6 +411,7 @@ Create the file now."""
                         )
                     else:
                         # No file found, use fallback extraction
+                        logger.warning("Structured output file not found, using fallback JSON extraction")
                         parsed_data = self._extract_json_robust(result_text, schema)
                         parts.append(
                             ToolCallPart(
@@ -392,6 +422,7 @@ Create the file now."""
                         )
                 else:
                     # Fallback: Use robust extraction with multiple strategies
+                    logger.debug("No structured output file configured, using robust JSON extraction")
                     parsed_data = self._extract_json_robust(result_text, schema)
                     parts.append(
                         ToolCallPart(
@@ -400,9 +431,10 @@ Create the file now."""
                             tool_call_id=f"call_{uuid.uuid4().hex[:16]}",
                         )
                     )
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
                 # If JSON parsing fails, return as text
                 # Pydantic AI will retry with validation error
+                logger.error("Failed to parse structured output JSON: %s", e)
                 parts.append(TextPart(content=result_text))
         else:
             # Unstructured text response - read from file
@@ -411,16 +443,22 @@ Create the file now."""
             if unstructured_file and Path(unstructured_file).exists():
                 # Read content from file
                 try:
+                    logger.debug("Reading unstructured output from file: %s", unstructured_file)
                     with open(unstructured_file, 'r') as f:
                         file_content = f.read()
                     # Cleanup temp file
                     self._cleanup_temp_file(unstructured_file)
+                    logger.debug("Successfully read %d bytes from unstructured output file", len(file_content))
                     parts.append(TextPart(content=file_content))
-                except Exception:
+                except Exception as e:
                     # Fallback to CLI response if file read fails
+                    logger.warning("Failed to read unstructured output file, using CLI response: %s", e)
                     parts.append(TextPart(content=result_text))
             else:
                 # Fallback to CLI response if no file
+                if unstructured_file:
+                    logger.warning("Unstructured output file not found: %s", unstructured_file)
+                logger.debug("Using CLI response text for unstructured output")
                 parts.append(TextPart(content=result_text))
 
         # Determine model name and create usage
@@ -502,30 +540,39 @@ Create the file now."""
             Tuple of (parsed_data, error_message). One will be None.
         """
         if not Path(file_path).exists():
+            logger.debug("Structured output file not found: %s", file_path)
             return None, None
+
+        logger.debug("Reading structured output file: %s", file_path)
 
         # Read file
         try:
             with open(file_path, 'r') as f:
                 file_content = f.read()
+            logger.debug("Read %d bytes from structured output file", len(file_content))
         except Exception as e:
+            logger.error("Failed to read structured output file: %s", e)
             self._cleanup_temp_file(file_path)
             return None, f"Failed to read file: {e}"
 
         # Parse JSON
         try:
             parsed_data = json.loads(file_content)
+            logger.debug("Successfully parsed JSON from structured output file")
         except json.JSONDecodeError as e:
+            logger.error("Invalid JSON in structured output file: %s", e)
             self._cleanup_temp_file(file_path)
             return None, f"Invalid JSON in file: {e}\nFile content:\n{file_content}"
 
         # Validate schema
         validation_error = self._validate_json_schema(parsed_data, schema)
         if validation_error:
+            logger.error("Schema validation failed: %s", validation_error)
             self._cleanup_temp_file(file_path)
             return None, validation_error
 
         # Validation passed - clean up file
+        logger.debug("Structured output validated successfully, cleaning up file")
         self._cleanup_temp_file(file_path)
         return parsed_data, None
 

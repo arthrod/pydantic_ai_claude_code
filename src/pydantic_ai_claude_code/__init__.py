@@ -23,12 +23,26 @@ Example:
     result = agent.run_sync("What is 2+2?")
     print(result.data)
     ```
+
+Logging:
+    To enable debug logging in your application:
+    ```python
+    import logging
+    logging.getLogger('pydantic_ai_claude_code').setLevel(logging.DEBUG)
+    ```
 """
+
+import logging
 
 from .model import ClaudeCodeModel
 from .provider import ClaudeCodeProvider
 from .registration import register_claude_code_model
 from .types import ClaudeCodeSettings
+
+# Configure module-level logger
+logger = logging.getLogger(__name__)
+# Use NullHandler by default - consuming applications configure as needed
+logger.addHandler(logging.NullHandler())
 
 # Auto-register on import so users can use Agent('claude-code:sonnet')
 register_claude_code_model()

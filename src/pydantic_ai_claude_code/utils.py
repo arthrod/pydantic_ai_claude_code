@@ -1,12 +1,15 @@
 """Utility functions for Claude Code model."""
 
 import json
+import logging
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
 
 from .types import ClaudeCodeSettings, ClaudeJSONResponse, ClaudeStreamEvent
+
+logger = logging.getLogger(__name__)
 
 
 def build_claude_command(
@@ -76,6 +79,8 @@ def build_claude_command(
     # Always reference prompt.md file
     cmd.append("Follow the instructions in prompt.md")
 
+    logger.debug("Built Claude command: %s", " ".join(cmd))
+
     return cmd
 
 
@@ -103,6 +108,7 @@ def run_claude_sync(
     # If no working directory, create a temp one
     if not cwd:
         cwd = tempfile.mkdtemp(prefix="claude_prompt_")
+        logger.debug("Created temporary working directory: %s", cwd)
 
     # Ensure working directory exists
     Path(cwd).mkdir(parents=True, exist_ok=True)
@@ -110,11 +116,13 @@ def run_claude_sync(
     # Write prompt to prompt.md in the working directory
     prompt_file = Path(cwd) / "prompt.md"
     prompt_file.write_text(prompt)
+    logger.debug("Wrote prompt (%d chars) to %s", len(prompt), prompt_file)
 
     # Build command (now references prompt.md)
     cmd = build_claude_command(settings=settings, output_format="json")
 
     # Run command
+    logger.info("Running Claude CLI synchronously in %s", cwd)
     result = subprocess.run(
         cmd,
         capture_output=True,
@@ -125,10 +133,12 @@ def run_claude_sync(
 
     # Parse JSON response
     response: ClaudeJSONResponse = json.loads(result.stdout)
+    logger.debug("Received response with %d tokens", response.get("usage", {}).get("output_tokens", 0))
 
     # Check for error
     if response.get("is_error"):
         error_msg = response.get("error", "Unknown error")
+        logger.error("Claude CLI returned error: %s", error_msg)
         raise RuntimeError(f"Claude CLI error: {error_msg}")
 
     return response
@@ -160,6 +170,7 @@ async def run_claude_async(
     # If no working directory, create a temp one
     if not cwd:
         cwd = tempfile.mkdtemp(prefix="claude_prompt_")
+        logger.debug("Created temporary working directory: %s", cwd)
 
     # Ensure working directory exists
     Path(cwd).mkdir(parents=True, exist_ok=True)
@@ -167,11 +178,14 @@ async def run_claude_async(
     # Write prompt to prompt.md in the working directory
     prompt_file = Path(cwd) / "prompt.md"
     prompt_file.write_text(prompt)
+    logger.debug("Wrote prompt (%d chars) to %s", len(prompt), prompt_file)
 
     # Build command (now references prompt.md)
     cmd = build_claude_command(settings=settings, output_format="json")
 
-    # Run command asynchronously with stdin explicitly closed
+    # Run command asynchronously
+    # stdin=DEVNULL because the CLI is non-interactive and should not read from stdin
+    logger.info("Running Claude CLI asynchronously in %s", cwd)
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -183,14 +197,17 @@ async def run_claude_async(
     stdout, stderr = await process.communicate()
 
     if process.returncode != 0:
+        logger.error("Claude CLI failed with return code %d: %s", process.returncode, stderr.decode())
         raise RuntimeError(f"Claude CLI error: {stderr.decode()}")
 
     # Parse JSON response
     response: ClaudeJSONResponse = json.loads(stdout.decode())
+    logger.debug("Received response with %d output tokens", response.get("usage", {}).get("output_tokens", 0))
 
     # Check for error
     if response.get("is_error"):
         error_msg = response.get("error", "Unknown error")
+        logger.error("Claude CLI returned error: %s", error_msg)
         raise RuntimeError(f"Claude CLI error: {error_msg}")
 
     return response
@@ -220,8 +237,12 @@ def parse_stream_json_line(line: str) -> ClaudeStreamEvent | None:
         return None
 
     try:
-        return json.loads(line)
-    except json.JSONDecodeError:
+        event = json.loads(line)
+        if event.get('type'):
+            logger.debug("Parsed stream event: type=%s", event['type'])
+        return event
+    except json.JSONDecodeError as e:
+        logger.warning("Failed to parse stream JSON line: %s", e)
         return None
 
 
@@ -245,6 +266,8 @@ async def run_claude_with_prefill(
     import uuid
 
     session_id = str(uuid.uuid4())
+
+    logger.info("Running Claude with prefill: %r", prefill_text)
 
     # Build messages with user prompt and assistant prefill
     messages = [
@@ -275,6 +298,7 @@ async def run_claude_with_prefill(
     input_data = "\n".join(json.dumps(msg) for msg in messages) + "\n"
 
     # Run command
+    logger.debug("Running Claude CLI with stream-json input/output")
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdin=asyncio.subprocess.PIPE,
@@ -286,6 +310,7 @@ async def run_claude_with_prefill(
     stdout, stderr = await process.communicate(input=input_data.encode())
 
     if process.returncode != 0:
+        logger.error("Claude CLI failed with return code %d: %s", process.returncode, stderr.decode())
         raise RuntimeError(f"Claude CLI error: {stderr.decode()}")
 
     # Parse stream-json output to extract final result
@@ -340,6 +365,8 @@ async def run_claude_with_jq_pipeline(
     """
     import asyncio
 
+    logger.info("Running Claude with jq JSON extraction pipeline")
+
     # First check if jq is available
     try:
         jq_check = await asyncio.create_subprocess_exec(
@@ -349,8 +376,10 @@ async def run_claude_with_jq_pipeline(
         )
         await jq_check.communicate()
         if jq_check.returncode != 0:
+            logger.error("jq is not installed")
             raise RuntimeError("jq is not installed. Install with: sudo apt-get install jq")
     except FileNotFoundError:
+        logger.error("jq is not available in PATH")
         raise RuntimeError("jq is not installed. Install with: sudo apt-get install jq")
 
     # Determine working directory
@@ -370,6 +399,7 @@ async def run_claude_with_jq_pipeline(
     # Run Claude CLI
     cmd = build_claude_command(settings=settings, output_format="json")
 
+    # stdin=DEVNULL because the CLI is non-interactive and should not read from stdin
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -409,6 +439,7 @@ async def run_claude_with_jq_pipeline(
     for jq_filter in jq_filters:
         try:
             # Use jq to process
+            logger.debug("Trying jq filter: %s", jq_filter)
             jq_process = await asyncio.create_subprocess_exec(
                 "jq", "-r", jq_filter,
                 stdin=asyncio.subprocess.PIPE,
@@ -422,13 +453,17 @@ async def run_claude_with_jq_pipeline(
                 cleaned_result = jq_stdout.decode().strip()
                 # Verify it's valid JSON
                 json.loads(cleaned_result)
+                logger.debug("Successfully extracted JSON using jq filter: %s", jq_filter)
                 break
-        except (json.JSONDecodeError, Exception):
+        except (json.JSONDecodeError, Exception) as e:
+            logger.debug("jq filter failed: %s - %s", jq_filter, e)
             continue
 
     if cleaned_result:
         response["result"] = cleaned_result
+        logger.info("jq pipeline successfully cleaned JSON response")
         return response
 
     # If all jq strategies fail, return original
+    logger.warning("All jq extraction strategies failed, returning original response")
     return response

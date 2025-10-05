@@ -1,5 +1,6 @@
 """Message conversion utilities for Claude Code model."""
 
+import logging
 from typing import Any
 
 from pydantic_ai.messages import (
@@ -13,6 +14,8 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def format_messages_for_claude(messages: list[ModelMessage]) -> str:
     """Convert Pydantic AI messages to a prompt string for Claude CLI.
@@ -23,6 +26,8 @@ def format_messages_for_claude(messages: list[ModelMessage]) -> str:
     Returns:
         Formatted prompt string
     """
+    logger.debug("Formatting %d messages for Claude CLI", len(messages))
+
     parts: list[str] = []
 
     for message in messages:
@@ -60,7 +65,10 @@ def format_messages_for_claude(messages: list[ModelMessage]) -> str:
                             args_str = str(part.args)
                         parts.append(f"Tool Call: {part.tool_name}({args_str})")
 
-    return "\n\n".join(parts)
+    formatted_prompt = "\n\n".join(parts)
+    logger.debug("Formatted prompt: %d parts, %d total chars", len(parts), len(formatted_prompt))
+
+    return formatted_prompt
 
 
 def extract_text_from_response(response_text: str) -> str:

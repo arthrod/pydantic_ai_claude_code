@@ -133,6 +133,30 @@ with ClaudeCodeProvider(use_temp_workspace=True) as provider:
 # Workspace automatically cleaned up
 ```
 
+### Logging
+
+The package uses Python's standard logging module. To enable debug logging in your application:
+
+```python
+import logging
+
+# Enable debug logging for pydantic-ai-claude-code
+logging.basicConfig(level=logging.DEBUG)
+logging.getLogger('pydantic_ai_claude_code').setLevel(logging.DEBUG)
+
+# Or just for specific components
+logging.getLogger('pydantic_ai_claude_code.model').setLevel(logging.DEBUG)
+logging.getLogger('pydantic_ai_claude_code.utils').setLevel(logging.INFO)
+```
+
+This will log:
+- Model initialization and configuration
+- CLI command execution and responses
+- Message formatting and conversion
+- Tool call parsing and execution
+- Structured output handling
+- Streaming events and completion
+
 ## Available Models
 
 - `claude-code:sonnet` - Claude 3.5 Sonnet (default, recommended)
