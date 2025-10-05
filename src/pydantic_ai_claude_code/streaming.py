@@ -50,8 +50,8 @@ async def run_claude_streaming(
         try:
             event = json.loads(line.decode().strip())
             event_count += 1
-            if event.get('type'):
-                logger.debug("Streaming event #%d: type=%s", event_count, event['type'])
+            if event.get("type"):
+                logger.debug("Streaming event #%d: type=%s", event_count, event["type"])
             yield event
         except json.JSONDecodeError as e:
             # Skip invalid JSON lines
@@ -65,7 +65,11 @@ async def run_claude_streaming(
 
     if process.returncode != 0:
         stderr = await process.stderr.read() if process.stderr else b""
-        logger.error("Claude CLI streaming failed with return code %d: %s", process.returncode, stderr.decode())
+        logger.error(
+            "Claude CLI streaming failed with return code %d: %s",
+            process.returncode,
+            stderr.decode(),
+        )
         raise RuntimeError(f"Claude CLI error: {stderr.decode()}")
 
 
@@ -83,13 +87,20 @@ def extract_text_from_stream_event(event: ClaudeStreamEvent) -> str | None:
     if event_type == "assistant":
         # Extract text from assistant message
         message = event.get("message", {})
+        if not isinstance(message, dict):
+            return None
+
         content = message.get("content", [])
+        if not isinstance(content, list):
+            return None
 
         # Concatenate all text parts
         text_parts = []
         for part in content:
             if isinstance(part, dict) and part.get("type") == "text":
-                text_parts.append(part.get("text", ""))
+                text_value = part.get("text", "")
+                if isinstance(text_value, str):
+                    text_parts.append(text_value)
 
         text = "".join(text_parts) if text_parts else None
         if text:
@@ -99,8 +110,9 @@ def extract_text_from_stream_event(event: ClaudeStreamEvent) -> str | None:
     elif event_type == "result":
         # Extract final result
         result = event.get("result")
-        if result:
-            logger.debug("Extracted result: %d chars", len(str(result)))
-        return result
+        if result and isinstance(result, str):
+            logger.debug("Extracted result: %d chars", len(result))
+            return result
+        return None
 
     return None

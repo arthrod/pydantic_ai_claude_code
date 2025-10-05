@@ -42,7 +42,8 @@ class ClaudeCodeStreamedResponse(StreamedResponse):
         self._model_name = model_name
         self._event_stream = event_stream
         self._timestamp = timestamp or datetime.now(timezone.utc)
-        self._usage: RequestUsage | None = None
+        # Initialize with zero usage, will be updated when result event arrives
+        self._usage: RequestUsage = RequestUsage()
 
     @property
     def model_name(self) -> str:
@@ -77,7 +78,12 @@ class ClaudeCodeStreamedResponse(StreamedResponse):
             if event_type == "assistant":
                 # Extract text from assistant message
                 message = event.get("message", {})
+                if not isinstance(message, dict):
+                    continue
+
                 content = message.get("content", [])
+                if not isinstance(content, list):
+                    continue
 
                 for part in content:
                     if isinstance(part, dict) and part.get("type") == "text":
@@ -86,7 +92,9 @@ class ClaudeCodeStreamedResponse(StreamedResponse):
                         if not text_started:
                             # First chunk - send PartStartEvent
                             text_started = True
-                            logger.debug("Streaming first text chunk: %d chars", len(text))
+                            logger.debug(
+                                "Streaming first text chunk: %d chars", len(text)
+                            )
                             yield PartStartEvent(
                                 index=0,
                                 part=TextPart(content=text),
@@ -94,9 +102,11 @@ class ClaudeCodeStreamedResponse(StreamedResponse):
                             full_text = text
                         else:
                             # Subsequent chunks - send delta
-                            delta = text[len(full_text):]
+                            delta = text[len(full_text) :]
                             if delta:
-                                logger.debug("Streaming text delta: %d chars", len(delta))
+                                logger.debug(
+                                    "Streaming text delta: %d chars", len(delta)
+                                )
                                 yield PartDeltaEvent(
                                     index=0,
                                     delta=TextPartDelta(content_delta=delta),
@@ -107,16 +117,17 @@ class ClaudeCodeStreamedResponse(StreamedResponse):
                 # Final result event
                 # Extract usage if available
                 usage_data = event.get("usage", {})
-                self._usage = RequestUsage(
-                    input_tokens=usage_data.get("input_tokens", 0),
-                    cache_write_tokens=usage_data.get("cache_creation_input_tokens", 0),
-                    cache_read_tokens=usage_data.get("cache_read_input_tokens", 0),
-                    output_tokens=usage_data.get("output_tokens", 0),
-                )
+                if isinstance(usage_data, dict):
+                    self._usage = RequestUsage(
+                        input_tokens=usage_data.get("input_tokens", 0),
+                        cache_write_tokens=usage_data.get("cache_creation_input_tokens", 0),
+                        cache_read_tokens=usage_data.get("cache_read_input_tokens", 0),
+                        output_tokens=usage_data.get("output_tokens", 0),
+                    )
 
                 logger.debug(
                     "Streaming completed: %d events, %d output tokens",
                     event_count,
-                    self._usage.output_tokens if self._usage else 0
+                    self._usage.output_tokens if self._usage else 0,
                 )
                 yield FinalResultEvent(tool_name=None, tool_call_id=None)

@@ -3,7 +3,6 @@
 import json
 import logging
 import uuid
-from typing import Any
 
 from pydantic_ai import ToolDefinition
 from pydantic_ai.messages import ToolCallPart
@@ -103,14 +102,16 @@ def parse_tool_calls(response_text: str) -> list[ToolCallPart] | None:
         if isinstance(data, dict) and data.get("type") == "tool_calls":
             calls = data.get("calls", [])
             if isinstance(calls, list) and calls:
-                logger.debug("Successfully parsed tool calls using strategy 1 (direct parse)")
+                logger.debug(
+                    "Successfully parsed tool calls using strategy 1 (direct parse)"
+                )
                 return _convert_to_tool_call_parts(calls)
     except json.JSONDecodeError:
         pass
 
     # Strategy 2: Extract JSON from markdown code blocks anywhere in text
     # Match ```json ... ``` or ``` ... ```
-    code_block_pattern = r'```(?:json)?\s*(\{.*?\})\s*```'
+    code_block_pattern = r"```(?:json)?\s*(\{.*?\})\s*```"
     matches = re.findall(code_block_pattern, response_text, re.DOTALL)
 
     for match in matches:
@@ -119,14 +120,16 @@ def parse_tool_calls(response_text: str) -> list[ToolCallPart] | None:
             if isinstance(data, dict) and data.get("type") == "tool_calls":
                 calls = data.get("calls", [])
                 if isinstance(calls, list) and calls:
-                    logger.debug("Successfully parsed tool calls using strategy 2 (code block extraction)")
+                    logger.debug(
+                        "Successfully parsed tool calls using strategy 2 (code block extraction)"
+                    )
                     return _convert_to_tool_call_parts(calls)
         except json.JSONDecodeError:
             continue
 
     # Strategy 3: Extract JSON objects from anywhere in text using regex
     # Match { ... } objects (handles nested braces)
-    json_pattern = r'\{(?:[^{}]|\{[^{}]*\})*\}'
+    json_pattern = r"\{(?:[^{}]|\{[^{}]*\})*\}"
     matches = re.findall(json_pattern, response_text, re.DOTALL)
 
     for match in matches:
@@ -135,7 +138,9 @@ def parse_tool_calls(response_text: str) -> list[ToolCallPart] | None:
             if isinstance(data, dict) and data.get("type") == "tool_calls":
                 calls = data.get("calls", [])
                 if isinstance(calls, list) and calls:
-                    logger.debug("Successfully parsed tool calls using strategy 3 (regex extraction)")
+                    logger.debug(
+                        "Successfully parsed tool calls using strategy 3 (regex extraction)"
+                    )
                     return _convert_to_tool_call_parts(calls)
         except json.JSONDecodeError:
             continue
@@ -166,7 +171,11 @@ def _convert_to_tool_call_parts(calls: list) -> list[ToolCallPart] | None:
             logger.warning("Skipping tool call without tool_name")
             continue
 
-        logger.debug("Converting tool call: %s with %d args", tool_name, len(args) if isinstance(args, dict) else 0)
+        logger.debug(
+            "Converting tool call: %s with %d args",
+            tool_name,
+            len(args) if isinstance(args, dict) else 0,
+        )
 
         tool_call_parts.append(
             ToolCallPart(
@@ -176,7 +185,9 @@ def _convert_to_tool_call_parts(calls: list) -> list[ToolCallPart] | None:
             )
         )
 
-    logger.debug("Converted %d tool calls to ToolCallPart objects", len(tool_call_parts))
+    logger.debug(
+        "Converted %d tool calls to ToolCallPart objects", len(tool_call_parts)
+    )
     return tool_call_parts if tool_call_parts else None
 
 

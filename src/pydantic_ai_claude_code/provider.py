@@ -1,10 +1,9 @@
 """Provider for Claude Code CLI model."""
 
 import logging
-import os
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .types import ClaudeCodeSettings
 
@@ -66,7 +65,10 @@ class ClaudeCodeProvider:
         logger.debug(
             "Initialized ClaudeCodeProvider with model=%s, working_directory=%s, "
             "use_temp_workspace=%s, dangerously_skip_permissions=%s",
-            model, working_directory, use_temp_workspace, dangerously_skip_permissions
+            model,
+            working_directory,
+            use_temp_workspace,
+            dangerously_skip_permissions,
         )
 
     def __enter__(self):
@@ -103,12 +105,14 @@ class ClaudeCodeProvider:
         Returns:
             Settings dictionary
         """
-        settings: ClaudeCodeSettings = {
-            "working_directory": str(self.working_directory) if self.working_directory else None,
+        settings: dict[str, Any] = {
+            "working_directory": str(self.working_directory)
+            if self.working_directory
+            else None,
             "allowed_tools": self.allowed_tools,
             "disallowed_tools": self.disallowed_tools,
             "append_system_prompt": self.append_system_prompt,
-            "permission_mode": self.permission_mode,  # type: ignore
+            "permission_mode": self.permission_mode,
             "model": self.model,
             "fallback_model": self.fallback_model,
             "max_turns": self.max_turns,
@@ -117,12 +121,14 @@ class ClaudeCodeProvider:
         }
 
         # Apply overrides
-        settings.update(overrides)  # type: ignore
+        for key, value in overrides.items():
+            settings[key] = value
 
-        # Remove None values
-        final_settings = {k: v for k, v in settings.items() if v is not None}  # type: ignore
+        # Remove None values and return as ClaudeCodeSettings
+        # TypedDict expects specific keys, but total=False allows partial dicts
+        final_settings = {k: v for k, v in settings.items() if v is not None}
 
         if overrides:
             logger.debug("Generated settings with overrides: %s", overrides)
 
-        return final_settings
+        return cast(ClaudeCodeSettings, final_settings)

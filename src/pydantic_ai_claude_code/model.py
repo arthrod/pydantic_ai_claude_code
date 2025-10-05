@@ -118,21 +118,21 @@ Complete this task now."""
             JSON instruction string to append to system prompt
         """
         schema = output_tool.parameters_json_schema
-        properties = schema.get('properties', {})
+        properties = schema.get("properties", {})
 
         # Build concrete example
-        example_obj = {}
+        example_obj: dict[str, Any] = {}
         for field, props in properties.items():
-            field_type = props.get('type', 'string')
-            if field_type == 'integer':
+            field_type = props.get("type", "string")
+            if field_type == "integer":
                 example_obj[field] = 42
-            elif field_type == 'number':
+            elif field_type == "number":
                 example_obj[field] = 3.14
-            elif field_type == 'boolean':
+            elif field_type == "boolean":
                 example_obj[field] = True
-            elif field_type == 'array':
+            elif field_type == "array":
                 example_obj[field] = ["item1", "item2"]
-            elif field_type == 'object':
+            elif field_type == "object":
                 example_obj[field] = {"key": "value"}
             else:
                 example_obj[field] = "example value"
@@ -182,8 +182,12 @@ Create the file now."""
         logger.info(
             "Starting non-streaming request with %d messages, output_tools=%s, function_tools=%s",
             len(messages),
-            len(model_request_parameters.output_tools) if model_request_parameters and model_request_parameters.output_tools else 0,
-            len(model_request_parameters.function_tools) if model_request_parameters and model_request_parameters.function_tools else 0
+            len(model_request_parameters.output_tools)
+            if model_request_parameters and model_request_parameters.output_tools
+            else 0,
+            len(model_request_parameters.function_tools)
+            if model_request_parameters and model_request_parameters.function_tools
+            else 0,
         )
 
         # Format messages into a prompt
@@ -193,15 +197,21 @@ Create the file now."""
         settings = self.provider.get_settings(model=self._model_name)
 
         # Check if we need structured output or function tools
-        output_tools = model_request_parameters.output_tools if model_request_parameters else []
-        function_tools = model_request_parameters.function_tools if model_request_parameters else []
+        output_tools = (
+            model_request_parameters.output_tools if model_request_parameters else []
+        )
+        function_tools = (
+            model_request_parameters.function_tools if model_request_parameters else []
+        )
 
         logger.debug("Formatted prompt length: %d chars", len(prompt))
 
         # Build system prompt
         system_prompt_parts = []
 
-        if model_request_parameters and hasattr(model_request_parameters, "system_prompt"):
+        if model_request_parameters and hasattr(
+            model_request_parameters, "system_prompt"
+        ):
             sp = getattr(model_request_parameters, "system_prompt", None)
             if sp:
                 system_prompt_parts.append(sp)
@@ -213,18 +223,24 @@ Create the file now."""
 
         # If there are output tools (structured output), instruct Claude to return JSON
         if output_tools:
-            json_instruction = self._build_structured_output_instruction(output_tools[0], settings)
+            json_instruction = self._build_structured_output_instruction(
+                output_tools[0], settings
+            )
             system_prompt_parts.append(json_instruction)
         elif not function_tools:
             # For unstructured output (no output_tools, no function_tools), use file-based output
-            unstructured_instruction = self._build_unstructured_output_instruction(settings)
+            unstructured_instruction = self._build_unstructured_output_instruction(
+                settings
+            )
             system_prompt_parts.append(unstructured_instruction)
 
         if system_prompt_parts:
             combined_prompt = "\n\n".join(system_prompt_parts)
             existing_prompt = settings.get("append_system_prompt")
             if existing_prompt:
-                settings["append_system_prompt"] = f"{existing_prompt}\n\n{combined_prompt}"
+                settings["append_system_prompt"] = (
+                    f"{existing_prompt}\n\n{combined_prompt}"
+                )
             else:
                 settings["append_system_prompt"] = combined_prompt
 
@@ -232,7 +248,12 @@ Create the file now."""
         response = await run_claude_async(prompt, settings=settings)
 
         # Convert to ModelResponse with usage
-        return self._convert_response(response, output_tools=output_tools, function_tools=function_tools, settings=settings)
+        return self._convert_response(
+            response,
+            output_tools=output_tools,
+            function_tools=function_tools,
+            settings=settings,
+        )
 
     @asynccontextmanager
     async def request_stream(
@@ -256,8 +277,12 @@ Create the file now."""
         logger.info(
             "Starting streaming request with %d messages, output_tools=%s, function_tools=%s",
             len(messages),
-            len(model_request_parameters.output_tools) if model_request_parameters and model_request_parameters.output_tools else 0,
-            len(model_request_parameters.function_tools) if model_request_parameters and model_request_parameters.function_tools else 0
+            len(model_request_parameters.output_tools)
+            if model_request_parameters and model_request_parameters.output_tools
+            else 0,
+            len(model_request_parameters.function_tools)
+            if model_request_parameters and model_request_parameters.function_tools
+            else 0,
         )
 
         # Format messages into a prompt
@@ -267,13 +292,19 @@ Create the file now."""
         settings = self.provider.get_settings(model=self._model_name)
 
         # Check if we need structured output or function tools
-        output_tools = model_request_parameters.output_tools if model_request_parameters else []
-        function_tools = model_request_parameters.function_tools if model_request_parameters else []
+        output_tools = (
+            model_request_parameters.output_tools if model_request_parameters else []
+        )
+        function_tools = (
+            model_request_parameters.function_tools if model_request_parameters else []
+        )
 
         # Build system prompt (same as request method)
         system_prompt_parts = []
 
-        if model_request_parameters and hasattr(model_request_parameters, "system_prompt"):
+        if model_request_parameters and hasattr(
+            model_request_parameters, "system_prompt"
+        ):
             sp = getattr(model_request_parameters, "system_prompt", None)
             if sp:
                 system_prompt_parts.append(sp)
@@ -283,23 +314,30 @@ Create the file now."""
             system_prompt_parts.append(tools_prompt)
 
         if output_tools:
-            json_instruction = self._build_structured_output_instruction(output_tools[0], settings)
+            json_instruction = self._build_structured_output_instruction(
+                output_tools[0], settings
+            )
             system_prompt_parts.append(json_instruction)
         elif not function_tools:
             # For unstructured output (no output_tools, no function_tools), use file-based output
-            unstructured_instruction = self._build_unstructured_output_instruction(settings)
+            unstructured_instruction = self._build_unstructured_output_instruction(
+                settings
+            )
             system_prompt_parts.append(unstructured_instruction)
 
         if system_prompt_parts:
             combined_prompt = "\n\n".join(system_prompt_parts)
             existing_prompt = settings.get("append_system_prompt")
             if existing_prompt:
-                settings["append_system_prompt"] = f"{existing_prompt}\n\n{combined_prompt}"
+                settings["append_system_prompt"] = (
+                    f"{existing_prompt}\n\n{combined_prompt}"
+                )
             else:
                 settings["append_system_prompt"] = combined_prompt
 
         # Get working directory
         import tempfile
+
         cwd = settings.get("working_directory")
 
         # If no working directory, create a temp one
@@ -372,7 +410,9 @@ Create the file now."""
                     usage=usage,
                 )
             else:
-                logger.debug("No tool calls found in response despite function_tools being provided")
+                logger.debug(
+                    "No tool calls found in response despite function_tools being provided"
+                )
 
         # Check if we need to return structured output via tool call
         if output_tools and len(output_tools) > 0:
@@ -382,10 +422,14 @@ Create the file now."""
 
             try:
                 # Check if Claude created a structured output file
-                structured_file = settings.get("__structured_output_file") if settings else None
+                structured_file = (
+                    settings.get("__structured_output_file") if settings else None
+                )
 
                 if structured_file:
-                    parsed_data, error_msg = self._read_structured_output_file(structured_file, schema)
+                    parsed_data, error_msg = self._read_structured_output_file(
+                        structured_file, schema
+                    )
 
                     if error_msg:
                         # Return error as text so Pydantic AI can retry
@@ -411,7 +455,9 @@ Create the file now."""
                         )
                     else:
                         # No file found, use fallback extraction
-                        logger.warning("Structured output file not found, using fallback JSON extraction")
+                        logger.warning(
+                            "Structured output file not found, using fallback JSON extraction"
+                        )
                         parsed_data = self._extract_json_robust(result_text, schema)
                         parts.append(
                             ToolCallPart(
@@ -422,7 +468,9 @@ Create the file now."""
                         )
                 else:
                     # Fallback: Use robust extraction with multiple strategies
-                    logger.debug("No structured output file configured, using robust JSON extraction")
+                    logger.debug(
+                        "No structured output file configured, using robust JSON extraction"
+                    )
                     parsed_data = self._extract_json_robust(result_text, schema)
                     parts.append(
                         ToolCallPart(
@@ -438,26 +486,41 @@ Create the file now."""
                 parts.append(TextPart(content=result_text))
         else:
             # Unstructured text response - read from file
-            unstructured_file = settings.get("__unstructured_output_file") if settings else None
+            unstructured_file_obj = (
+                settings.get("__unstructured_output_file") if settings else None
+            )
+            unstructured_file = (
+                str(unstructured_file_obj) if unstructured_file_obj else None
+            )
 
             if unstructured_file and Path(unstructured_file).exists():
                 # Read content from file
                 try:
-                    logger.debug("Reading unstructured output from file: %s", unstructured_file)
-                    with open(unstructured_file, 'r') as f:
+                    logger.debug(
+                        "Reading unstructured output from file: %s", unstructured_file
+                    )
+                    with open(unstructured_file, "r") as f:
                         file_content = f.read()
                     # Cleanup temp file
                     self._cleanup_temp_file(unstructured_file)
-                    logger.debug("Successfully read %d bytes from unstructured output file", len(file_content))
+                    logger.debug(
+                        "Successfully read %d bytes from unstructured output file",
+                        len(file_content),
+                    )
                     parts.append(TextPart(content=file_content))
                 except Exception as e:
                     # Fallback to CLI response if file read fails
-                    logger.warning("Failed to read unstructured output file, using CLI response: %s", e)
+                    logger.warning(
+                        "Failed to read unstructured output file, using CLI response: %s",
+                        e,
+                    )
                     parts.append(TextPart(content=result_text))
             else:
                 # Fallback to CLI response if no file
                 if unstructured_file:
-                    logger.warning("Unstructured output file not found: %s", unstructured_file)
+                    logger.warning(
+                        "Unstructured output file not found: %s", unstructured_file
+                    )
                 logger.debug("Using CLI response text for unstructured output")
                 parts.append(TextPart(content=result_text))
 
@@ -494,32 +557,34 @@ Create the file now."""
             Error message if validation fails, None if valid
         """
         # Check required fields
-        required_fields = schema.get('required', [])
+        required_fields = schema.get("required", [])
         missing_fields = [field for field in required_fields if field not in data]
 
         if missing_fields:
             return f"Missing required fields: {missing_fields}\nReceived data: {json.dumps(data)}"
 
         # Validate field types
-        properties = schema.get('properties', {})
+        properties = schema.get("properties", {})
         for field_name, field_schema in properties.items():
             if field_name in data:
-                expected_type = field_schema.get('type')
+                expected_type = field_schema.get("type")
                 actual_value = data[field_name]
 
                 # Type checking
                 type_valid = True
-                if expected_type == 'string' and not isinstance(actual_value, str):
+                if expected_type == "string" and not isinstance(actual_value, str):
                     type_valid = False
-                elif expected_type == 'integer' and not isinstance(actual_value, int):
+                elif expected_type == "integer" and not isinstance(actual_value, int):
                     type_valid = False
-                elif expected_type == 'number' and not isinstance(actual_value, (int, float)):
+                elif expected_type == "number" and not isinstance(
+                    actual_value, (int, float)
+                ):
                     type_valid = False
-                elif expected_type == 'boolean' and not isinstance(actual_value, bool):
+                elif expected_type == "boolean" and not isinstance(actual_value, bool):
                     type_valid = False
-                elif expected_type == 'array' and not isinstance(actual_value, list):
+                elif expected_type == "array" and not isinstance(actual_value, list):
                     type_valid = False
-                elif expected_type == 'object' and not isinstance(actual_value, dict):
+                elif expected_type == "object" and not isinstance(actual_value, dict):
                     type_valid = False
 
                 if not type_valid:
@@ -547,7 +612,7 @@ Create the file now."""
 
         # Read file
         try:
-            with open(file_path, 'r') as f:
+            with open(file_path, "r") as f:
                 file_content = f.read()
             logger.debug("Read %d bytes from structured output file", len(file_content))
         except Exception as e:
@@ -616,7 +681,7 @@ Create the file now."""
 
         # Strategy 2: Extract JSON using regex
         # Match { ... } objects (handles nested braces)
-        json_pattern = r'\{(?:[^{}]|\{[^{}]*\})*\}'
+        json_pattern = r"\{(?:[^{}]|\{[^{}]*\})*\}"
         matches = re.findall(json_pattern, text, re.DOTALL)
 
         for match in matches:
@@ -628,7 +693,7 @@ Create the file now."""
                 continue
 
         # Strategy 3: Extract JSON array using regex
-        array_pattern = r'\[(?:[^\[\]]|\[[^\[\]]*\])*\]'
+        array_pattern = r"\[(?:[^\[\]]|\[[^\[\]]*\])*\]"
         array_matches = re.findall(array_pattern, text, re.DOTALL)
 
         for match in array_matches:
@@ -636,7 +701,7 @@ Create the file now."""
                 parsed = json.loads(match)
                 if isinstance(parsed, list):
                     # If single-field schema expects array, wrap it
-                    properties = schema.get('properties', {})
+                    properties = schema.get("properties", {})
                     if len(properties) == 1:
                         field_name = list(properties.keys())[0]
                         return {field_name: parsed}
@@ -646,29 +711,29 @@ Create the file now."""
                 continue
 
         # Strategy 4: For single-field schemas, try to auto-wrap values
-        properties = schema.get('properties', {})
+        properties = schema.get("properties", {})
         if len(properties) == 1:
             field_name = list(properties.keys())[0]
-            field_type = properties[field_name].get('type')
+            field_type = properties[field_name].get("type")
 
             # Try parsing as JSON first (could be array/object)
             try:
                 parsed_value = json.loads(cleaned)
-                if field_type == 'array' and isinstance(parsed_value, list):
+                if field_type == "array" and isinstance(parsed_value, list):
                     return {field_name: parsed_value}
-                elif field_type == 'object' and isinstance(parsed_value, dict):
+                elif field_type == "object" and isinstance(parsed_value, dict):
                     return {field_name: parsed_value}
             except json.JSONDecodeError:
                 pass
 
             # Handle comma-separated lists for arrays
-            if field_type == 'array':
+            if field_type == "array":
                 value = cleaned.strip()
                 # Try parsing as comma-separated list
-                if ',' in value or ' and ' in value or ' or ' in value:
+                if "," in value or " and " in value or " or " in value:
                     # Replace common separators
-                    value = value.replace(' and ', ',').replace(' or ', ',')
-                    items = [item.strip().strip('"\'') for item in value.split(',')]
+                    value = value.replace(" and ", ",").replace(" or ", ",")
+                    items = [item.strip().strip("\"'") for item in value.split(",")]
                     items = [item for item in items if item]
                     if items:
                         return {field_name: items}
@@ -684,20 +749,22 @@ Create the file now."""
 
             # Type conversion
             try:
-                if field_type == 'integer':
+                if field_type == "integer":
                     return {field_name: int(value)}
-                elif field_type == 'number':
+                elif field_type == "number":
                     return {field_name: float(value)}
-                elif field_type == 'boolean':
-                    bool_val = value.lower() in ('true', '1', 'yes')
+                elif field_type == "boolean":
+                    bool_val = value.lower() in ("true", "1", "yes")
                     return {field_name: bool_val}
-                elif field_type == 'string':
+                elif field_type == "string":
                     return {field_name: value}
             except (ValueError, AttributeError):
                 pass
 
         # If all strategies fail, raise error
-        raise json.JSONDecodeError("Could not extract valid JSON from response", text, 0)
+        raise json.JSONDecodeError(
+            "Could not extract valid JSON from response", text, 0
+        )
 
     def _get_model_name(self, response: ClaudeJSONResponse) -> str:
         """Extract model name from Claude response.
@@ -726,17 +793,19 @@ Create the file now."""
             Request usage information
         """
         usage_data = response.get("usage", {})
+        server_tool_use = usage_data.get("server_tool_use", {}) if isinstance(usage_data, dict) else {}
+        web_search_requests = server_tool_use.get("web_search_requests", 0) if isinstance(server_tool_use, dict) else 0
 
         return RequestUsage(
-            input_tokens=usage_data.get("input_tokens", 0),
-            cache_write_tokens=usage_data.get("cache_creation_input_tokens", 0),
-            cache_read_tokens=usage_data.get("cache_read_input_tokens", 0),
-            output_tokens=usage_data.get("output_tokens", 0),
+            input_tokens=usage_data.get("input_tokens", 0) if isinstance(usage_data, dict) else 0,
+            cache_write_tokens=usage_data.get("cache_creation_input_tokens", 0) if isinstance(usage_data, dict) else 0,
+            cache_read_tokens=usage_data.get("cache_read_input_tokens", 0) if isinstance(usage_data, dict) else 0,
+            output_tokens=usage_data.get("output_tokens", 0) if isinstance(usage_data, dict) else 0,
             details={
-                "web_search_requests": usage_data.get("server_tool_use", {}).get(
-                    "web_search_requests", 0
-                ),
-                "total_cost_usd_cents": int(response.get("total_cost_usd", 0.0) * 100),  # Store as cents
+                "web_search_requests": web_search_requests,
+                "total_cost_usd_cents": int(
+                    response.get("total_cost_usd", 0.0) * 100
+                ),  # Store as cents
                 "duration_ms": response.get("duration_ms", 0),
                 "duration_api_ms": response.get("duration_api_ms", 0),
                 "num_turns": response.get("num_turns", 0),

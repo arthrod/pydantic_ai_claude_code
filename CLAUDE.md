@@ -40,11 +40,23 @@ uv run pytest -v -s
 uv build
 
 # Publish to PyPI (production)
+# Option 1: Using token from file
+uv publish --token $(cat .pypi.token)
+
+# Option 2: Using environment variable (recommended)
+export UV_PUBLISH_TOKEN=$(cat .pypi.token)
 uv publish
 
 # Publish to TestPyPI
+# Option 1: Using token from file
+uv publish --publish-url https://test.pypi.org/legacy/ --token $(cat .pypi-test.token)
+
+# Option 2: Using environment variable (recommended)
+export UV_PUBLISH_TOKEN=$(cat .pypi-test.token)
 uv publish --publish-url https://test.pypi.org/legacy/
 ```
+
+**Note**: PyPI tokens are stored in `.pypi.token` (production) and `.pypi-test.token` (test) files. These are gitignored for security. The recommended approach is to use the `--token` flag or `UV_PUBLISH_TOKEN` environment variable.
 
 ### Running Examples
 ```bash

@@ -40,7 +40,9 @@ def register_claude_code_model() -> None:
                     if provider == "claude-code":
                         from .model import ClaudeCodeModel
 
-                        logger.debug("Creating ClaudeCodeModel for model: %s", model_name)
+                        logger.debug(
+                            "Creating ClaudeCodeModel for model: %s", model_name
+                        )
                         return ClaudeCodeModel(model_name)
                 except ValueError:
                     # Not a provider:model format, fall through to original
@@ -51,7 +53,9 @@ def register_claude_code_model() -> None:
 
         # Replace the function
         models.infer_model = _patched_infer_model
-        logger.info("Successfully registered claude-code model provider with Pydantic AI")
+        logger.info(
+            "Successfully registered claude-code model provider with Pydantic AI"
+        )
 
     except ImportError as e:
         # pydantic_ai not installed, skip registration

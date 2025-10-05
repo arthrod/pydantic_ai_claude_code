@@ -32,41 +32,48 @@ def format_messages_for_claude(messages: list[ModelMessage]) -> str:
 
     for message in messages:
         if isinstance(message, ModelRequest):
-            for part in message.parts:
-                if isinstance(part, SystemPromptPart):
+            for req_part in message.parts:
+                if isinstance(req_part, SystemPromptPart):
                     # System prompts are prepended
-                    parts.insert(0, f"System: {part.content}")
-                elif isinstance(part, UserPromptPart):
-                    parts.append(f"User: {part.content}")
-                elif isinstance(part, ToolReturnPart):
+                    parts.insert(0, f"System: {req_part.content}")
+                elif isinstance(req_part, UserPromptPart):
+                    parts.append(f"User: {req_part.content}")
+                elif isinstance(req_part, ToolReturnPart):
                     # Tool returns are formatted as context
-                    parts.append(f"Tool Result ({part.tool_name}): {part.content}")
+                    parts.append(f"Tool Result ({req_part.tool_name}): {req_part.content}")
 
         elif isinstance(message, ModelResponse):
-            for part in message.parts:
-                if isinstance(part, TextPart):
-                    parts.append(f"Assistant: {part.content}")
-                elif isinstance(part, ToolCallPart):
+            for resp_part in message.parts:
+                if isinstance(resp_part, TextPart):
+                    parts.append(f"Assistant: {resp_part.content}")
+                elif isinstance(resp_part, ToolCallPart):
                     # Skip output tool calls (like final_result) - these are internal to Pydantic AI
                     # and confuse Claude if included in the conversation
-                    if part.tool_name not in ("final_result",):
+                    if resp_part.tool_name not in ("final_result",):
                         # Only include actual function/tool calls, not output formatting
-                        if isinstance(part.args, dict):
-                            args_str = ", ".join(f"{k}={v}" for k, v in part.args.items())
-                        elif isinstance(part.args, str):
+                        if isinstance(resp_part.args, dict):
+                            args_str = ", ".join(
+                                f"{k}={v}" for k, v in resp_part.args.items()
+                            )
+                        elif isinstance(resp_part.args, str):
                             # args might be a JSON string, try to parse it
                             try:
                                 import json
-                                args_dict = json.loads(part.args)
-                                args_str = ", ".join(f"{k}={v}" for k, v in args_dict.items())
+
+                                args_dict = json.loads(resp_part.args)
+                                args_str = ", ".join(
+                                    f"{k}={v}" for k, v in args_dict.items()
+                                )
                             except (json.JSONDecodeError, AttributeError):
-                                args_str = part.args
+                                args_str = resp_part.args
                         else:
-                            args_str = str(part.args)
-                        parts.append(f"Tool Call: {part.tool_name}({args_str})")
+                            args_str = str(resp_part.args)
+                        parts.append(f"Tool Call: {resp_part.tool_name}({args_str})")
 
     formatted_prompt = "\n\n".join(parts)
-    logger.debug("Formatted prompt: %d parts, %d total chars", len(parts), len(formatted_prompt))
+    logger.debug(
+        "Formatted prompt: %d parts, %d total chars", len(parts), len(formatted_prompt)
+    )
 
     return formatted_prompt
 
@@ -107,19 +114,19 @@ def build_conversation_context(messages: list[ModelMessage]) -> dict[str, Any]:
 
     for message in messages:
         if isinstance(message, ModelRequest):
-            for part in message.parts:
-                if isinstance(part, SystemPromptPart):
+            for req_part in message.parts:
+                if isinstance(req_part, SystemPromptPart):
                     context["has_system_prompt"] = True
-                elif isinstance(part, UserPromptPart):
+                elif isinstance(req_part, UserPromptPart):
                     context["num_user_messages"] += 1
-                elif isinstance(part, ToolReturnPart):
+                elif isinstance(req_part, ToolReturnPart):
                     context["num_tool_returns"] += 1
 
         elif isinstance(message, ModelResponse):
-            for part in message.parts:
-                if isinstance(part, TextPart):
+            for resp_part in message.parts:
+                if isinstance(resp_part, TextPart):
                     context["num_assistant_messages"] += 1
-                elif isinstance(part, ToolCallPart):
+                elif isinstance(resp_part, ToolCallPart):
                     context["num_tool_calls"] += 1
 
     return context

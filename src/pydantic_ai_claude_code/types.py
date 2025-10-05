@@ -92,7 +92,9 @@ class ClaudeStreamResultEvent(TypedDict, total=False):
     error: str | None
 
 
-ClaudeStreamEvent = ClaudeStreamSystemEvent | ClaudeStreamAssistantEvent | ClaudeStreamResultEvent
+ClaudeStreamEvent = (
+    ClaudeStreamSystemEvent | ClaudeStreamAssistantEvent | ClaudeStreamResultEvent
+)
 
 
 class ClaudeCodeSettings(TypedDict, total=False):
@@ -102,7 +104,9 @@ class ClaudeCodeSettings(TypedDict, total=False):
     allowed_tools: list[str] | None
     disallowed_tools: list[str] | None
     append_system_prompt: str | None
-    permission_mode: Literal["acceptEdits", "bypassPermissions", "default", "plan"] | None
+    permission_mode: (
+        Literal["acceptEdits", "bypassPermissions", "default", "plan"] | None
+    )
     model: str | None
     fallback_model: str | None
     max_turns: int | None
@@ -110,3 +114,4 @@ class ClaudeCodeSettings(TypedDict, total=False):
     verbose: bool
     dangerously_skip_permissions: bool
     __structured_output_file: str  # Internal: temp file path for structured output
+    __unstructured_output_file: str  # Internal: temp file path for unstructured output

@@ -5,7 +5,7 @@ import logging
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 from .types import ClaudeCodeSettings, ClaudeJSONResponse, ClaudeStreamEvent
 
@@ -31,6 +31,9 @@ def build_claude_command(
     settings = settings or {}
     cmd = ["claude", "--print"]
 
+    # Always add verbose for better debugging (returns array of events)
+    cmd.append("--verbose")
+
     # Add output format
     cmd.extend(["--output-format", output_format])
 
@@ -38,40 +41,49 @@ def build_claude_command(
     if input_format != "text":
         cmd.extend(["--input-format", input_format])
 
-    # Add verbose flag if using stream-json output
+    # For stream-json, add include-partial-messages for continuous progress
     if output_format == "stream-json":
-        cmd.append("--verbose")
+        cmd.append("--include-partial-messages")
 
     # Add settings
     if settings.get("working_directory"):
         # Claude CLI doesn't have a --cwd flag, so we'll handle this via subprocess cwd
         pass
 
-    if settings.get("allowed_tools"):
+    allowed_tools = settings.get("allowed_tools")
+    if allowed_tools:
         cmd.append("--allowed-tools")
-        cmd.extend(settings["allowed_tools"])
+        cmd.extend(allowed_tools)
 
-    if settings.get("disallowed_tools"):
+    disallowed_tools = settings.get("disallowed_tools")
+    if disallowed_tools:
         cmd.append("--disallowed-tools")
-        cmd.extend(settings["disallowed_tools"])
+        cmd.extend(disallowed_tools)
 
-    if settings.get("append_system_prompt"):
-        cmd.extend(["--append-system-prompt", settings["append_system_prompt"]])
+    append_system_prompt = settings.get("append_system_prompt")
+    if append_system_prompt:
+        cmd.extend(["--append-system-prompt", append_system_prompt])
 
-    if settings.get("permission_mode"):
-        cmd.extend(["--permission-mode", settings["permission_mode"]])
+    # Always set permission mode for non-interactive use
+    # Default to bypassPermissions since we cannot provide input (stdin=DEVNULL)
+    permission_mode = settings.get("permission_mode") or "bypassPermissions"
+    cmd.extend(["--permission-mode", permission_mode])
 
-    if settings.get("model"):
-        cmd.extend(["--model", settings["model"]])
+    model = settings.get("model")
+    if model:
+        cmd.extend(["--model", model])
 
-    if settings.get("fallback_model"):
-        cmd.extend(["--fallback-model", settings["fallback_model"]])
+    fallback_model = settings.get("fallback_model")
+    if fallback_model:
+        cmd.extend(["--fallback-model", fallback_model])
 
-    if settings.get("max_turns"):
-        cmd.extend(["--max-turns", str(settings["max_turns"])])
+    max_turns = settings.get("max_turns")
+    if max_turns:
+        cmd.extend(["--max-turns", str(max_turns)])
 
-    if settings.get("session_id"):
-        cmd.extend(["--session-id", settings["session_id"]])
+    session_id = settings.get("session_id")
+    if session_id:
+        cmd.extend(["--session-id", session_id])
 
     if settings.get("dangerously_skip_permissions"):
         cmd.append("--dangerously-skip-permissions")
@@ -132,8 +144,29 @@ def run_claude_sync(
     )
 
     # Parse JSON response
-    response: ClaudeJSONResponse = json.loads(result.stdout)
-    logger.debug("Received response with %d tokens", response.get("usage", {}).get("output_tokens", 0))
+    # With --verbose, JSON output is an array of events with result event at the end
+    raw_response = json.loads(result.stdout)
+
+    if isinstance(raw_response, list):
+        # Verbose mode: array of events - find the result event (usually last)
+        logger.debug("Received verbose JSON output with %d events", len(raw_response))
+        response = None
+        for event in raw_response:
+            if isinstance(event, dict) and event.get("type") == "result":
+                response = cast(ClaudeJSONResponse, event)
+                break
+
+        if not response:
+            logger.error("No result event found in verbose output")
+            raise RuntimeError("No result event in Claude CLI output")
+    else:
+        # Non-verbose mode: single result object
+        response = cast(ClaudeJSONResponse, raw_response)
+
+    logger.debug(
+        "Received response with %d tokens",
+        response.get("usage", {}).get("output_tokens", 0) if isinstance(response.get("usage"), dict) else 0,
+    )
 
     # Check for error
     if response.get("is_error"):
@@ -197,12 +230,37 @@ async def run_claude_async(
     stdout, stderr = await process.communicate()
 
     if process.returncode != 0:
-        logger.error("Claude CLI failed with return code %d: %s", process.returncode, stderr.decode())
+        logger.error(
+            "Claude CLI failed with return code %d: %s",
+            process.returncode,
+            stderr.decode(),
+        )
         raise RuntimeError(f"Claude CLI error: {stderr.decode()}")
 
     # Parse JSON response
-    response: ClaudeJSONResponse = json.loads(stdout.decode())
-    logger.debug("Received response with %d output tokens", response.get("usage", {}).get("output_tokens", 0))
+    # With --verbose, JSON output is an array of events with result event at the end
+    raw_response = json.loads(stdout.decode())
+
+    if isinstance(raw_response, list):
+        # Verbose mode: array of events - find the result event (usually last)
+        logger.debug("Received verbose JSON output with %d events", len(raw_response))
+        response = None
+        for event in raw_response:
+            if isinstance(event, dict) and event.get("type") == "result":
+                response = cast(ClaudeJSONResponse, event)
+                break
+
+        if not response:
+            logger.error("No result event found in verbose output")
+            raise RuntimeError("No result event in Claude CLI output")
+    else:
+        # Non-verbose mode: single result object
+        response = cast(ClaudeJSONResponse, raw_response)
+
+    logger.debug(
+        "Received response with %d output tokens",
+        response.get("usage", {}).get("output_tokens", 0) if isinstance(response.get("usage"), dict) else 0,
+    )
 
     # Check for error
     if response.get("is_error"):
@@ -238,8 +296,8 @@ def parse_stream_json_line(line: str) -> ClaudeStreamEvent | None:
 
     try:
         event = json.loads(line)
-        if event.get('type'):
-            logger.debug("Parsed stream event: type=%s", event['type'])
+        if event.get("type"):
+            logger.debug("Parsed stream event: type=%s", event["type"])
         return event
     except json.JSONDecodeError as e:
         logger.warning("Failed to parse stream JSON line: %s", e)
@@ -275,21 +333,19 @@ async def run_claude_with_prefill(
             "type": "user",
             "message": {"role": "user", "content": prompt},
             "session_id": session_id,
-            "parent_tool_use_id": None
+            "parent_tool_use_id": None,
         },
         {
             "type": "assistant",
             "message": {"role": "assistant", "content": prefill_text},
             "session_id": session_id,
-            "parent_tool_use_id": None
-        }
+            "parent_tool_use_id": None,
+        },
     ]
 
     # Build command for stream-json input/output
     cmd = build_claude_command(
-        settings=settings,
-        input_format="stream-json",
-        output_format="stream-json"
+        settings=settings, input_format="stream-json", output_format="stream-json"
     )
 
     cwd = settings.get("working_directory") if settings else None
@@ -310,34 +366,42 @@ async def run_claude_with_prefill(
     stdout, stderr = await process.communicate(input=input_data.encode())
 
     if process.returncode != 0:
-        logger.error("Claude CLI failed with return code %d: %s", process.returncode, stderr.decode())
+        logger.error(
+            "Claude CLI failed with return code %d: %s",
+            process.returncode,
+            stderr.decode(),
+        )
         raise RuntimeError(f"Claude CLI error: {stderr.decode()}")
 
     # Parse stream-json output to extract final result
-    lines = stdout.decode().strip().split('\n')
+    lines = stdout.decode().strip().split("\n")
     result_text = None
 
     for line in lines:
         event = parse_stream_json_line(line)
-        if event and event.get('type') == 'result':
-            result_text = event.get('result', '')
-            # Return the result event as ClaudeJSONResponse
-            return event
-        elif event and event.get('type') == 'assistant':
-            # Extract text from assistant message
-            msg = event.get('message', {})
-            content = msg.get('content', [])
-            for part in content:
-                if isinstance(part, dict) and part.get('type') == 'text':
-                    result_text = part.get('text', '')
+        if event and isinstance(event, dict):
+            event_type = event.get("type")
+            if event_type == "result":
+                # Return the result event as ClaudeJSONResponse (compatible structure)
+                # Cast to ClaudeJSONResponse type
+                return cast(ClaudeJSONResponse, event)
+            elif event_type == "assistant":
+                # Extract text from assistant message
+                msg = event.get("message", {})
+                if isinstance(msg, dict):
+                    content = msg.get("content", [])
+                    if isinstance(content, list):
+                        for part in content:
+                            if isinstance(part, dict) and part.get("type") == "text":
+                                result_text = part.get("text", "")
 
     # Fallback: construct response from accumulated text
     if result_text:
         return {
-            'result': result_text,
-            'is_error': False,
-            'usage': {},
-            'total_cost_usd': 0.0
+            "result": result_text,
+            "is_error": False,
+            "usage": {},
+            "total_cost_usd": 0.0,
         }
 
     raise RuntimeError("No result found in stream-json output")
@@ -370,14 +434,17 @@ async def run_claude_with_jq_pipeline(
     # First check if jq is available
     try:
         jq_check = await asyncio.create_subprocess_exec(
-            "which", "jq",
+            "which",
+            "jq",
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         await jq_check.communicate()
         if jq_check.returncode != 0:
             logger.error("jq is not installed")
-            raise RuntimeError("jq is not installed. Install with: sudo apt-get install jq")
+            raise RuntimeError(
+                "jq is not installed. Install with: sudo apt-get install jq"
+            )
     except FileNotFoundError:
         logger.error("jq is not available in PATH")
         raise RuntimeError("jq is not installed. Install with: sudo apt-get install jq")
@@ -425,7 +492,7 @@ async def run_claude_with_jq_pipeline(
     # Strategy: Try multiple jq filters in order of preference
     jq_filters = [
         # 1. Try parsing directly
-        '.',
+        ".",
         # 2. Remove markdown code blocks and parse
         'gsub("```json\\n"; "") | gsub("\\n```"; "") | gsub("```"; "") | fromjson',
         # 3. Extract first JSON object
@@ -441,19 +508,25 @@ async def run_claude_with_jq_pipeline(
             # Use jq to process
             logger.debug("Trying jq filter: %s", jq_filter)
             jq_process = await asyncio.create_subprocess_exec(
-                "jq", "-r", jq_filter,
+                "jq",
+                "-r",
+                jq_filter,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
             )
 
-            jq_stdout, jq_stderr = await jq_process.communicate(input=result_text.encode())
+            jq_stdout, jq_stderr = await jq_process.communicate(
+                input=result_text.encode()
+            )
 
             if jq_process.returncode == 0:
                 cleaned_result = jq_stdout.decode().strip()
                 # Verify it's valid JSON
                 json.loads(cleaned_result)
-                logger.debug("Successfully extracted JSON using jq filter: %s", jq_filter)
+                logger.debug(
+                    "Successfully extracted JSON using jq filter: %s", jq_filter
+                )
                 break
         except (json.JSONDecodeError, Exception) as e:
             logger.debug("jq filter failed: %s - %s", jq_filter, e)
