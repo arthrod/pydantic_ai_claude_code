@@ -2,7 +2,9 @@
 
 import json
 import logging
+import re
 import uuid
+from typing import Any
 
 from pydantic_ai import ToolDefinition
 from pydantic_ai.messages import ToolCallPart
@@ -25,47 +27,34 @@ def format_tools_for_prompt(tools: list[ToolDefinition]) -> str:
 
     logger.debug("Formatting %d tools for prompt", len(tools))
 
-    tool_descriptions = []
+    # Build simple natural descriptions
+    func_descriptions = []
     for tool in tools:
-        logger.debug("Adding tool to prompt: %s", tool.name)
-        schema_str = json.dumps(tool.parameters_json_schema, indent=2)
-        desc = f"""
-## Tool: {tool.name}
-
-Description: {tool.description or "No description provided"}
-
-Parameters Schema:
-```json
-{schema_str}
-```
-"""
-        tool_descriptions.append(desc)
+        logger.debug("Adding function to prompt: %s", tool.name)
+        params = tool.parameters_json_schema.get("properties", {})
+        param_list = ", ".join(params.keys())
+        func_descriptions.append(
+            f"- {tool.name}({param_list}): {tool.description or 'No description'}"
+        )
 
     tools_prompt = f"""
-# Available Tools
+IMPORTANT PROTOCOL - Read carefully:
 
-You have access to the following tools. To use a tool, respond with a JSON object in this EXACT format:
+If you need data from external functions:
+1. First turn: Output ONLY "EXECUTE: function_name(params)" - nothing else
+2. You'll receive "Tool Result (function_name): <data>"
+3. Second turn: Answer the user's question using that data - DO NOT call EXECUTE again
 
-```json
-{{
-  "type": "tool_calls",
-  "calls": [
-    {{"tool_name": "tool_name_here", "args": {{"param1": "value1", "param2": "value2"}}}}
-  ]
-}}
-```
+Example:
+User: What's 5 + 3?
+You: EXECUTE: add(a=5, b=3)
+Tool Result (add): 8
+You: The answer is 8.
 
-You can call multiple tools in one response by adding more objects to the "calls" array.
+Available functions:
+{chr(10).join(func_descriptions)}
 
-IMPORTANT:
-- Only call tools when necessary to answer the user's question
-- If you can answer directly, provide a normal text response instead
-- When calling tools, ONLY return the JSON - no explanatory text before or after
-- Tool names must match exactly
-- Args must conform to the parameter schema
-
-Available Tools:
-{"".join(tool_descriptions)}
+CRITICAL: If you see "Tool Result" in the conversation, that means you already called the function. Use that result to answer - DO NOT output EXECUTE again!
 """
     return tools_prompt
 
@@ -73,77 +62,132 @@ Available Tools:
 def parse_tool_calls(response_text: str) -> list[ToolCallPart] | None:
     """Parse tool calls from Claude's response.
 
+    Supports both new EXECUTE format and legacy JSON format.
+
     Args:
         response_text: The response text from Claude
 
     Returns:
         List of ToolCallPart objects if tool calls detected, None otherwise
     """
-    import re
-
     logger.debug("Parsing tool calls from response (%d chars)", len(response_text))
 
-    # Strategy 1: Try parsing the whole response directly (handle simple cases)
-    cleaned = response_text.strip()
+    # New format: EXECUTE: function_name(param1=value1, param2=value2)
+    execute_pattern = r"EXECUTE:\s*(\w+)\((.*?)\)"
+    match = re.search(execute_pattern, response_text, re.DOTALL)
 
-    # Remove markdown code blocks if present at start/end
+    if match:
+        tool_name = match.group(1)
+        args_str = match.group(2).strip()
+
+        # Parse arguments - handle nested structures properly
+        args: dict[str, Any] = {}
+        if args_str:
+            # Manually parse to handle brackets, quotes, etc.
+            i = 0
+            while i < len(args_str):
+                # Skip whitespace
+                while i < len(args_str) and args_str[i].isspace():
+                    i += 1
+                if i >= len(args_str):
+                    break
+
+                # Find parameter name
+                name_match = re.match(r'(\w+)\s*=\s*', args_str[i:])
+                if not name_match:
+                    break
+
+                param_name = name_match.group(1)
+                i += name_match.end()
+
+                # Find parameter value - handle different types
+                value_str = ""
+                if i < len(args_str):
+                    # Handle lists
+                    if args_str[i] == '[':
+                        bracket_count = 0
+                        start = i
+                        while i < len(args_str):
+                            if args_str[i] == '[':
+                                bracket_count += 1
+                            elif args_str[i] == ']':
+                                bracket_count -= 1
+                                if bracket_count == 0:
+                                    i += 1
+                                    break
+                            i += 1
+                        value_str = args_str[start:i]
+                    # Handle quoted strings
+                    elif args_str[i] in ('"', "'"):
+                        quote = args_str[i]
+                        i += 1
+                        start = i
+                        while i < len(args_str) and args_str[i] != quote:
+                            i += 1
+                        value_str = args_str[start:i]
+                        if i < len(args_str):
+                            i += 1  # Skip closing quote
+                    # Handle unquoted values (numbers, booleans, etc.)
+                    else:
+                        start = i
+                        while i < len(args_str) and args_str[i] not in (',', ')'):
+                            i += 1
+                        value_str = args_str[start:i].strip()
+
+                # Parse the value
+                try:
+                    # Handle booleans
+                    if value_str.lower() == "true":
+                        args[param_name] = True
+                    elif value_str.lower() == "false":
+                        args[param_name] = False
+                    # Handle lists
+                    elif value_str.startswith("["):
+                        args[param_name] = json.loads(value_str)
+                    # Handle numbers
+                    elif "." in value_str and value_str.replace(".", "").replace("-", "").isdigit():
+                        args[param_name] = float(value_str)
+                    elif value_str.isdigit() or (value_str.startswith("-") and value_str[1:].isdigit()):
+                        args[param_name] = int(value_str)
+                    # String value
+                    else:
+                        args[param_name] = value_str
+                except (ValueError, json.JSONDecodeError) as e:
+                    logger.warning("Failed to parse value '%s' for param '%s': %s", value_str, param_name, e)
+                    args[param_name] = value_str
+
+                # Skip comma
+                while i < len(args_str) and args_str[i] in (',', ' '):
+                    i += 1
+
+        logger.debug("Parsed EXECUTE format: %s with %d args", tool_name, len(args))
+        return [
+            ToolCallPart(
+                tool_name=tool_name,
+                args=args,
+                tool_call_id=f"call_{uuid.uuid4().hex[:16]}",
+            )
+        ]
+
+    # Legacy JSON format fallback (for backwards compatibility)
+    cleaned = response_text.strip()
     if cleaned.startswith("```json"):
         cleaned = cleaned[7:]
     elif cleaned.startswith("```"):
         cleaned = cleaned[3:]
-
     if cleaned.endswith("```"):
         cleaned = cleaned[:-3]
     cleaned = cleaned.strip()
 
-    # Try to parse as JSON directly
     try:
         data = json.loads(cleaned)
         if isinstance(data, dict) and data.get("type") == "tool_calls":
             calls = data.get("calls", [])
             if isinstance(calls, list) and calls:
-                logger.debug(
-                    "Successfully parsed tool calls using strategy 1 (direct parse)"
-                )
+                logger.debug("Parsed legacy JSON format")
                 return _convert_to_tool_call_parts(calls)
     except json.JSONDecodeError:
         pass
-
-    # Strategy 2: Extract JSON from markdown code blocks anywhere in text
-    # Match ```json ... ``` or ``` ... ```
-    code_block_pattern = r"```(?:json)?\s*(\{.*?\})\s*```"
-    matches = re.findall(code_block_pattern, response_text, re.DOTALL)
-
-    for match in matches:
-        try:
-            data = json.loads(match)
-            if isinstance(data, dict) and data.get("type") == "tool_calls":
-                calls = data.get("calls", [])
-                if isinstance(calls, list) and calls:
-                    logger.debug(
-                        "Successfully parsed tool calls using strategy 2 (code block extraction)"
-                    )
-                    return _convert_to_tool_call_parts(calls)
-        except json.JSONDecodeError:
-            continue
-
-    # Strategy 3: Extract JSON objects from anywhere in text using regex
-    # Match { ... } objects (handles nested braces)
-    json_pattern = r"\{(?:[^{}]|\{[^{}]*\})*\}"
-    matches = re.findall(json_pattern, response_text, re.DOTALL)
-
-    for match in matches:
-        try:
-            data = json.loads(match)
-            if isinstance(data, dict) and data.get("type") == "tool_calls":
-                calls = data.get("calls", [])
-                if isinstance(calls, list) and calls:
-                    logger.debug(
-                        "Successfully parsed tool calls using strategy 3 (regex extraction)"
-                    )
-                    return _convert_to_tool_call_parts(calls)
-        except json.JSONDecodeError:
-            continue
 
     logger.debug("No tool calls found in response")
     return None

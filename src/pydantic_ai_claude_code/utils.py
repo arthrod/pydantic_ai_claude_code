@@ -31,9 +31,6 @@ def build_claude_command(
     settings = settings or {}
     cmd = ["claude", "--print"]
 
-    # Always add verbose for better debugging (returns array of events)
-    cmd.append("--verbose")
-
     # Add output format
     cmd.extend(["--output-format", output_format])
 

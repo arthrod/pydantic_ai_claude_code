@@ -115,3 +115,4 @@ class ClaudeCodeSettings(TypedDict, total=False):
     dangerously_skip_permissions: bool
     __structured_output_file: str  # Internal: temp file path for structured output
     __unstructured_output_file: str  # Internal: temp file path for unstructured output
+    __function_call_file: str  # Internal: temp file path for function call JSON

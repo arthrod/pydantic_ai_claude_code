@@ -44,7 +44,7 @@ class ClaudeCodeProvider:
             permission_mode: Permission mode ("acceptEdits", "bypassPermissions", "default", "plan")
             model: Model to use (e.g., "sonnet", "opus", or full model name)
             fallback_model: Fallback model when primary is overloaded
-            max_turns: Maximum number of agentic turns
+            max_turns: Maximum number of agentic turns (default: None for no limit)
             verbose: Enable verbose output
             dangerously_skip_permissions: Skip all permission checks (default: True for non-interactive use)
             use_temp_workspace: If True, creates a temporary workspace directory (default: True to mimic cloud providers)

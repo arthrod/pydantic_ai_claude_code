@@ -1,6 +1,5 @@
 """Basic integration tests for Claude Code model."""
 
-import pydantic_ai_claude_code  # Register the provider
 import pytest
 from pydantic import BaseModel
 

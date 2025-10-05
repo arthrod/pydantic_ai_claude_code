@@ -1,6 +1,5 @@
 """Tests for utility functions."""
 
-import json
 
 from pydantic_ai_claude_code.types import ClaudeCodeSettings
 from pydantic_ai_claude_code.utils import build_claude_command, parse_stream_json_line
@@ -45,7 +44,8 @@ def test_build_claude_command_stream_json():
 
     assert "--output-format" in cmd
     assert "stream-json" in cmd
-    assert "--verbose" in cmd  # Required for stream-json
+    # Verbose is no longer always included
+    assert "--include-partial-messages" in cmd
 
 
 def test_parse_stream_json_line_valid():

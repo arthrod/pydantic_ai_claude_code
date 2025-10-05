@@ -62,7 +62,7 @@ def test_format_conversation():
 
 
 def test_format_tool_call():
-    """Test formatting tool calls."""
+    """Test formatting tool calls - tool calls are skipped in history."""
     messages = [
         ModelResponse(
             parts=[
@@ -77,9 +77,9 @@ def test_format_tool_call():
 
     formatted = format_messages_for_claude(messages)
 
-    assert "Tool Call: calculator" in formatted
-    assert "a=2" in formatted
-    assert "b=2" in formatted
+    # Tool calls are not included in conversation history
+    # (only tool results are shown as "Context: ...")
+    assert "calculator" not in formatted or formatted == ""
 
 
 def test_format_tool_return():
@@ -98,7 +98,7 @@ def test_format_tool_return():
 
     formatted = format_messages_for_claude(messages)
 
-    assert "Tool Result (calculator): 4" in formatted
+    assert "Context: 4" in formatted
 
 
 def test_build_conversation_context_empty():

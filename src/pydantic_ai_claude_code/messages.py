@@ -39,36 +39,17 @@ def format_messages_for_claude(messages: list[ModelMessage]) -> str:
                 elif isinstance(req_part, UserPromptPart):
                     parts.append(f"User: {req_part.content}")
                 elif isinstance(req_part, ToolReturnPart):
-                    # Tool returns are formatted as context
-                    parts.append(f"Tool Result ({req_part.tool_name}): {req_part.content}")
+                    # Format tool returns as plain contextual data (no mention of tools/functions)
+                    parts.append(f"Context: {req_part.content}")
 
         elif isinstance(message, ModelResponse):
             for resp_part in message.parts:
                 if isinstance(resp_part, TextPart):
                     parts.append(f"Assistant: {resp_part.content}")
                 elif isinstance(resp_part, ToolCallPart):
-                    # Skip output tool calls (like final_result) - these are internal to Pydantic AI
-                    # and confuse Claude if included in the conversation
-                    if resp_part.tool_name not in ("final_result",):
-                        # Only include actual function/tool calls, not output formatting
-                        if isinstance(resp_part.args, dict):
-                            args_str = ", ".join(
-                                f"{k}={v}" for k, v in resp_part.args.items()
-                            )
-                        elif isinstance(resp_part.args, str):
-                            # args might be a JSON string, try to parse it
-                            try:
-                                import json
-
-                                args_dict = json.loads(resp_part.args)
-                                args_str = ", ".join(
-                                    f"{k}={v}" for k, v in args_dict.items()
-                                )
-                            except (json.JSONDecodeError, AttributeError):
-                                args_str = resp_part.args
-                        else:
-                            args_str = str(resp_part.args)
-                        parts.append(f"Tool Call: {resp_part.tool_name}({args_str})")
+                    # Skip tool calls entirely - don't show Claude it requested functions
+                    # Only show tool RESULTS (ToolReturnPart) in the conversation
+                    pass
 
     formatted_prompt = "\n\n".join(parts)
     logger.debug(

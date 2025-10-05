@@ -12,9 +12,11 @@ from typing import Any, AsyncIterator
 
 from pydantic_ai.messages import (
     ModelMessage,
+    ModelRequest,
     ModelResponse,
     TextPart,
     ToolCallPart,
+    ToolReturnPart,
 )
 from pydantic_ai.models import (
     Model,
@@ -216,19 +218,80 @@ Create the file now."""
             if sp:
                 system_prompt_parts.append(sp)
 
-        # Add function tools prompt if present
-        if function_tools:
-            tools_prompt = format_tools_for_prompt(function_tools)
-            system_prompt_parts.append(tools_prompt)
+        # Check if we have tool results yet
+        has_tool_results = any(
+            isinstance(part, ToolReturnPart)
+            for msg in messages
+            if isinstance(msg, ModelRequest)
+            for part in msg.parts
+        )
 
-        # If there are output tools (structured output), instruct Claude to return JSON
-        if output_tools:
+        # Add function tools prompt ONLY if there are no tool results yet
+        # Once we have results, we don't want to confuse Claude with tool definitions
+        if function_tools and not has_tool_results:
+            # First call: Use structured output to get function call as JSON
+            # Build a schema for the function call
+            tool_call_schema = {
+                "type": "object",
+                "properties": {
+                    "function_name": {
+                        "type": "string",
+                        "enum": [tool.name for tool in function_tools],
+                        "description": "The name of the function to call"
+                    },
+                    "arguments": {
+                        "type": "object",
+                        "description": "The arguments to pass to the function"
+                    }
+                },
+                "required": ["function_name", "arguments"]
+            }
+
+            # Build description of available functions
+            func_descriptions = []
+            for tool in function_tools:
+                params_desc = json.dumps(tool.parameters_json_schema, indent=2)
+                func_descriptions.append(
+                    f"- {tool.name}: {tool.description or 'No description'}\n  Parameters: {params_desc}"
+                )
+
+            # Generate unique filename for function call output
+            function_call_file = f"/tmp/claude_function_call_{uuid.uuid4().hex}.json"
+            settings["__function_call_file"] = function_call_file
+
+            function_call_instruction = f"""FUNCTION CALL MODE
+
+Analyze the user's request and determine if you need to call one of these functions:
+
+{chr(10).join(func_descriptions)}
+
+If you need to call a function, use the Write tool to create: {function_call_file}
+
+The JSON file must match this schema:
+{json.dumps(tool_call_schema, indent=2)}
+
+Example:
+{{"function_name": "process_data", "arguments": {{"name": "Widget", "count": 10}}}}
+
+CRITICAL: Write ONLY valid JSON to the file. After creating the file, do NOT output anything else."""
+
+            system_prompt_parts.append(function_call_instruction)
+        elif function_tools and has_tool_results:
+            # Second call after function execution: just let Claude compose response
+            # Add unstructured output instruction
+            unstructured_instruction = self._build_unstructured_output_instruction(settings)
+            system_prompt_parts.append(unstructured_instruction)
+
+        # Add output instructions (only if not in function call mode)
+        if output_tools and not function_tools:
+            # Structured output: instruct Claude to write JSON to file
             json_instruction = self._build_structured_output_instruction(
                 output_tools[0], settings
             )
             system_prompt_parts.append(json_instruction)
         elif not function_tools:
-            # For unstructured output (no output_tools, no function_tools), use file-based output
+            # Unstructured output (no function tools, no output tools): write to file
+            # For function tools, we parse JSON from stdout instead
             unstructured_instruction = self._build_unstructured_output_instruction(
                 settings
             )
@@ -309,17 +372,32 @@ Create the file now."""
             if sp:
                 system_prompt_parts.append(sp)
 
+        # Add function tools prompt ONLY if there are no tool results yet
         if function_tools:
-            tools_prompt = format_tools_for_prompt(function_tools)
-            system_prompt_parts.append(tools_prompt)
+            # Check if any messages contain tool results
+            has_tool_results = any(
+                isinstance(part, ToolReturnPart)
+                for msg in messages
+                if isinstance(msg, ModelRequest)
+                for part in msg.parts
+            )
 
+            if not has_tool_results:
+                # First call: show tool definitions so Claude can decide to use them
+                tools_prompt = format_tools_for_prompt(function_tools)
+                system_prompt_parts.append(tools_prompt)
+            # Else: tool already called, don't show definitions, let Claude compose response
+
+        # Add output instructions
         if output_tools:
+            # Structured output: instruct Claude to write JSON to file
             json_instruction = self._build_structured_output_instruction(
                 output_tools[0], settings
             )
             system_prompt_parts.append(json_instruction)
         elif not function_tools:
-            # For unstructured output (no output_tools, no function_tools), use file-based output
+            # Unstructured output (no function tools, no output tools): write to file
+            # For function tools, we parse JSON from stdout instead
             unstructured_instruction = self._build_unstructured_output_instruction(
                 settings
             )
@@ -396,11 +474,53 @@ Create the file now."""
 
         # First, check for function tool calls (takes precedence)
         if function_tools:
+            # Check if we have a function call file
+            function_call_file_obj = settings.get("__function_call_file") if settings else None
+            function_call_file = str(function_call_file_obj) if function_call_file_obj else None
+
+            if function_call_file and Path(function_call_file).exists():
+                # Read function call from file
+                try:
+                    logger.debug("Reading function call from file: %s", function_call_file)
+                    with open(function_call_file, "r") as f:
+                        function_call_data = json.load(f)
+
+                    # Cleanup temp file
+                    self._cleanup_temp_file(function_call_file)
+
+                    # Extract function name and arguments
+                    function_name = function_call_data.get("function_name")
+                    arguments = function_call_data.get("arguments", {})
+
+                    if function_name:
+                        logger.debug("Parsed function call: %s with %d args", function_name, len(arguments))
+                        tool_call = ToolCallPart(
+                            tool_name=function_name,
+                            args=arguments,
+                            tool_call_id=f"call_{uuid.uuid4().hex[:16]}",
+                        )
+                        parts.append(tool_call)
+
+                        # Create usage info and return early
+                        usage = self._create_usage(response)
+                        model_name = self._get_model_name(response)
+                        return ModelResponse(
+                            parts=[tool_call],
+                            model_name=model_name,
+                            timestamp=datetime.now(timezone.utc),
+                            usage=usage,
+                        )
+                except Exception as e:
+                    logger.error("Failed to read function call file: %s", e)
+                    # Fall through to text parsing fallback
+            else:
+                logger.debug("No function call file found, checking response text")
+
+            # Fallback: try parsing from response text (legacy EXECUTE format)
             tool_calls = parse_tool_calls(result_text)
             if tool_calls:
-                logger.debug("Parsed %d tool calls from response", len(tool_calls))
+                logger.debug("Parsed %d tool calls from response text", len(tool_calls))
                 parts.extend(tool_calls)
-                # Create usage info and return early
                 usage = self._create_usage(response)
                 model_name = self._get_model_name(response)
                 return ModelResponse(
@@ -411,7 +531,7 @@ Create the file now."""
                 )
             else:
                 logger.debug(
-                    "No tool calls found in response despite function_tools being provided"
+                    "No tool calls found despite function_tools being provided"
                 )
 
         # Check if we need to return structured output via tool call
