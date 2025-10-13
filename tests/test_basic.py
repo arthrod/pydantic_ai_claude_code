@@ -2,8 +2,8 @@
 
 import pytest
 from pydantic import BaseModel
-
 from pydantic_ai import Agent
+
 from pydantic_ai_claude_code import ClaudeCodeProvider
 
 
@@ -16,7 +16,7 @@ class MathResult(BaseModel):
 
 def test_basic_query_sync():
     """Test basic synchronous query using string format."""
-    agent = Agent('claude-code:sonnet')
+    agent = Agent("claude-code:sonnet")
 
     result = agent.run_sync("What is 2+2? Just give me the number.")
     assert "4" in str(result.output)
@@ -24,7 +24,7 @@ def test_basic_query_sync():
 
 def test_haiku_model():
     """Test that haiku model works."""
-    agent = Agent('claude-code:haiku')
+    agent = Agent("claude-code:haiku")
 
     result = agent.run_sync("What is 2+2? Just give me the number.")
     assert "4" in str(result.output)
@@ -32,7 +32,7 @@ def test_haiku_model():
 
 def test_opus_model():
     """Test that opus model works."""
-    agent = Agent('claude-code:opus')
+    agent = Agent("claude-code:opus")
 
     result = agent.run_sync("What is 2+2? Just give me the number.")
     assert "4" in str(result.output)
@@ -41,7 +41,7 @@ def test_opus_model():
 @pytest.mark.asyncio
 async def test_basic_query_async():
     """Test basic asynchronous query using string format."""
-    agent = Agent('claude-code:sonnet')
+    agent = Agent("claude-code:sonnet")
 
     result = await agent.run("What is 3+3? Just give me the number.")
     assert "6" in str(result.output)
@@ -49,7 +49,7 @@ async def test_basic_query_async():
 
 def test_structured_output_sync():
     """Test structured output with Pydantic model using string format."""
-    agent = Agent('claude-code:sonnet', output_type=MathResult)
+    agent = Agent("claude-code:sonnet", output_type=MathResult)
 
     result = agent.run_sync("Calculate 5+7 and explain why.")
 
@@ -92,7 +92,7 @@ def test_temp_workspace():
 
 def test_usage_tracking():
     """Test that usage information is tracked using string format."""
-    agent = Agent('claude-code:sonnet')
+    agent = Agent("claude-code:sonnet")
 
     result = agent.run_sync("Say hello")
 

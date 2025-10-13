@@ -1,8 +1,8 @@
 """Custom StreamedResponse implementation for Claude Code model."""
 
 import logging
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
-from typing import AsyncIterator
 
 from pydantic_ai.messages import (
     FinalResultEvent,
@@ -120,7 +120,9 @@ class ClaudeCodeStreamedResponse(StreamedResponse):
                 if isinstance(usage_data, dict):
                     self._usage = RequestUsage(
                         input_tokens=usage_data.get("input_tokens", 0),
-                        cache_write_tokens=usage_data.get("cache_creation_input_tokens", 0),
+                        cache_write_tokens=usage_data.get(
+                            "cache_creation_input_tokens", 0
+                        ),
                         cache_read_tokens=usage_data.get("cache_read_input_tokens", 0),
                         output_tokens=usage_data.get("output_tokens", 0),
                     )

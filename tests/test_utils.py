@@ -1,6 +1,5 @@
 """Tests for utility functions."""
 
-
 from pydantic_ai_claude_code.types import ClaudeCodeSettings
 from pydantic_ai_claude_code.utils import build_claude_command, parse_stream_json_line
 

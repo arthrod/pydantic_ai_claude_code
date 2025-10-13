@@ -64,4 +64,5 @@ def register_claude_code_model() -> None:
             "pydantic_ai not found - claude-code provider not registered. "
             "Install pydantic-ai to use 'claude-code:model' strings.",
             ImportWarning,
+            stacklevel=2,
         )

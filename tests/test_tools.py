@@ -226,7 +226,7 @@ def test_agent_single_tool_string_param():
         }
         return test_data.get(dataset, "Unknown")
 
-    agent = Agent('claude-code:sonnet', tools=[get_test_data])
+    agent = Agent("claude-code:sonnet", tools=[get_test_data])
     result = agent.run_sync("What test data is available for the 'users' dataset?")
 
     # Tool should be called and result should mention the test data
@@ -244,7 +244,7 @@ def test_agent_multiple_tools():
         """Multiply two numbers."""
         return a * b
 
-    agent = Agent('claude-code:sonnet', tools=[add, multiply])
+    agent = Agent("claude-code:sonnet", tools=[add, multiply])
     result = agent.run_sync("What is 5 + 3, and what is 4 * 6?")
 
     # Should have results from both tools
@@ -265,9 +265,11 @@ def test_agent_tool_with_multiple_param_types():
     ) -> str:
         """Process data with various types."""
         status = "available" if is_available else "unavailable"
-        return f"{name}: {count} items at ${price:.2f}, {status}, tags: {', '.join(tags)}"
+        return (
+            f"{name}: {count} items at ${price:.2f}, {status}, tags: {', '.join(tags)}"
+        )
 
-    agent = Agent('claude-code:sonnet', tools=[process_data])
+    agent = Agent("claude-code:sonnet", tools=[process_data])
     result = agent.run_sync(
         "Process this product: Widget, 10 items, $29.99, available, tags are 'electronics' and 'gadgets'"
     )
@@ -285,8 +287,10 @@ def test_agent_tool_with_object_param():
         """Analyze a configuration object."""
         return f"Config has {len(config)} settings: {', '.join(config.keys())}"
 
-    agent = Agent('claude-code:sonnet', tools=[analyze_config])
-    result = agent.run_sync("Analyze this config: theme=dark, language=en, notifications=true")
+    agent = Agent("claude-code:sonnet", tools=[analyze_config])
+    result = agent.run_sync(
+        "Analyze this config: theme=dark, language=en, notifications=true"
+    )
 
     # Should extract and pass object to tool
     assert "settings" in result.output.lower() or "config" in result.output.lower()
@@ -303,7 +307,7 @@ def test_agent_tool_with_context():
         return str(ctx.deps.get(key, "not_found"))
 
     agent = Agent(
-        'claude-code:sonnet',
+        "claude-code:sonnet",
         deps_type=dict,
         tools=[get_config_value],
         system_prompt=(
@@ -314,10 +318,13 @@ def test_agent_tool_with_context():
 
     result = agent.run_sync(
         "Call get_config_value with key='db_host' to get the database host.",
-        deps={"db_host": "postgres-prod.example.com", "db_port": "5432"}
+        deps={"db_host": "postgres-prod.example.com", "db_port": "5432"},
     )
 
-    assert "postgres-prod" in result.output.lower() or "example.com" in result.output.lower()
+    assert (
+        "postgres-prod" in result.output.lower()
+        or "example.com" in result.output.lower()
+    )
 
 
 def test_agent_tool_error_handling():
@@ -329,7 +336,7 @@ def test_agent_tool_error_handling():
             raise ValueError("Cannot divide by zero")
         return a / b
 
-    agent = Agent('claude-code:sonnet', tools=[divide])
+    agent = Agent("claude-code:sonnet", tools=[divide])
 
     # The error should be raised, not suppressed
     with pytest.raises(ValueError, match="Cannot divide by zero"):
@@ -344,7 +351,7 @@ async def test_agent_tool_async():
         """Get service status."""
         return f"{service} is operational"
 
-    agent = Agent('claude-code:sonnet', tools=[get_status])
+    agent = Agent("claude-code:sonnet", tools=[get_status])
     result = await agent.run("Check the status of the API service")
 
     assert "api" in result.output.lower() and "operational" in result.output.lower()
@@ -357,7 +364,7 @@ def test_agent_tool_list_return():
         """Get all factors of a number."""
         return [i for i in range(1, number + 1) if number % i == 0]
 
-    agent = Agent('claude-code:sonnet', tools=[get_factors])
+    agent = Agent("claude-code:sonnet", tools=[get_factors])
     result = agent.run_sync("What are the factors of 12?")
 
     # Should include the factors: 1, 2, 3, 4, 6, 12
@@ -376,7 +383,7 @@ def test_agent_tool_complex_nested_params():
         """Create a user with profile and roles."""
         return f"Created user {username} with roles {', '.join(roles)}"
 
-    agent = Agent('claude-code:sonnet', tools=[create_user])
+    agent = Agent("claude-code:sonnet", tools=[create_user])
     result = agent.run_sync(
         "Create user 'alice' with profile age=30, city=London and roles admin, editor"
     )
@@ -397,7 +404,7 @@ def test_agent_no_tool_needed():
         call_count += 1
         return x * 2
 
-    agent = Agent('claude-code:sonnet', tools=[expensive_operation])
+    agent = Agent("claude-code:sonnet", tools=[expensive_operation])
     result = agent.run_sync("What is the capital of France?")
 
     # Tool shouldn't be called for this simple question
@@ -421,8 +428,10 @@ def test_agent_sequential_tool_calls():
             return a * b
         return 0
 
-    agent = Agent('claude-code:sonnet', tools=[calculate])
-    result = agent.run_sync("Calculate: first add 5 and 3, then multiply the result by 2")
+    agent = Agent("claude-code:sonnet", tools=[calculate])
+    result = agent.run_sync(
+        "Calculate: first add 5 and 3, then multiply the result by 2"
+    )
 
     # Should have called the tool at least twice
     output = result.output
@@ -436,7 +445,7 @@ def test_agent_tool_with_default_params():
         """Greet someone."""
         return f"{greeting}, {name}!"
 
-    agent = Agent('claude-code:sonnet', tools=[greet])
+    agent = Agent("claude-code:sonnet", tools=[greet])
     result = agent.run_sync("Greet Alice")
 
     assert "alice" in result.output.lower()
@@ -451,7 +460,7 @@ def test_agent_tool_returns_none():
         # Just logs, returns None
         print(f"Logged: {message}")
 
-    agent = Agent('claude-code:sonnet', tools=[log_message])
+    agent = Agent("claude-code:sonnet", tools=[log_message])
     result = agent.run_sync("Log the message: System started")
 
     # Should handle None return gracefully and produce a response
@@ -473,7 +482,7 @@ def test_agent_tool_with_enum_param():
             return f"Mode set to {mode}"
         return f"Invalid mode. Use: {', '.join(valid_modes)}"
 
-    agent = Agent('claude-code:sonnet', tools=[set_mode])
+    agent = Agent("claude-code:sonnet", tools=[set_mode])
     result = agent.run_sync("Set the mode to fast")
 
     assert "fast" in result.output.lower()
@@ -494,7 +503,7 @@ def test_agent_multiple_tools_selective_calling():
         """Get news."""
         return f"Latest {topic} news: All quiet"
 
-    agent = Agent('claude-code:sonnet', tools=[weather, time, news])
+    agent = Agent("claude-code:sonnet", tools=[weather, time, news])
     result = agent.run_sync("What time is it in UTC?")
 
     # Should call the time tool, not weather or news

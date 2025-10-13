@@ -93,7 +93,7 @@ def parse_tool_calls(response_text: str) -> list[ToolCallPart] | None:
                     break
 
                 # Find parameter name
-                name_match = re.match(r'(\w+)\s*=\s*', args_str[i:])
+                name_match = re.match(r"(\w+)\s*=\s*", args_str[i:])
                 if not name_match:
                     break
 
@@ -104,13 +104,13 @@ def parse_tool_calls(response_text: str) -> list[ToolCallPart] | None:
                 value_str = ""
                 if i < len(args_str):
                     # Handle lists
-                    if args_str[i] == '[':
+                    if args_str[i] == "[":
                         bracket_count = 0
                         start = i
                         while i < len(args_str):
-                            if args_str[i] == '[':
+                            if args_str[i] == "[":
                                 bracket_count += 1
-                            elif args_str[i] == ']':
+                            elif args_str[i] == "]":
                                 bracket_count -= 1
                                 if bracket_count == 0:
                                     i += 1
@@ -130,7 +130,7 @@ def parse_tool_calls(response_text: str) -> list[ToolCallPart] | None:
                     # Handle unquoted values (numbers, booleans, etc.)
                     else:
                         start = i
-                        while i < len(args_str) and args_str[i] not in (',', ')'):
+                        while i < len(args_str) and args_str[i] not in (",", ")"):
                             i += 1
                         value_str = args_str[start:i].strip()
 
@@ -145,19 +145,29 @@ def parse_tool_calls(response_text: str) -> list[ToolCallPart] | None:
                     elif value_str.startswith("["):
                         args[param_name] = json.loads(value_str)
                     # Handle numbers
-                    elif "." in value_str and value_str.replace(".", "").replace("-", "").isdigit():
+                    elif (
+                        "." in value_str
+                        and value_str.replace(".", "").replace("-", "").isdigit()
+                    ):
                         args[param_name] = float(value_str)
-                    elif value_str.isdigit() or (value_str.startswith("-") and value_str[1:].isdigit()):
+                    elif value_str.isdigit() or (
+                        value_str.startswith("-") and value_str[1:].isdigit()
+                    ):
                         args[param_name] = int(value_str)
                     # String value
                     else:
                         args[param_name] = value_str
                 except (ValueError, json.JSONDecodeError) as e:
-                    logger.warning("Failed to parse value '%s' for param '%s': %s", value_str, param_name, e)
+                    logger.warning(
+                        "Failed to parse value '%s' for param '%s': %s",
+                        value_str,
+                        param_name,
+                        e,
+                    )
                     args[param_name] = value_str
 
                 # Skip comma
-                while i < len(args_str) and args_str[i] in (',', ' '):
+                while i < len(args_str) and args_str[i] in (",", " "):
                     i += 1
 
         logger.debug("Parsed EXECUTE format: %s with %d args", tool_name, len(args))

@@ -2,14 +2,86 @@
 
 import json
 import logging
+import re
 import subprocess
 import tempfile
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import cast
 
 from .types import ClaudeCodeSettings, ClaudeJSONResponse, ClaudeStreamEvent
 
 logger = logging.getLogger(__name__)
+
+
+def detect_rate_limit(error_output: str) -> tuple[bool, str | None]:
+    """Detect rate limit error and extract reset time.
+
+    Args:
+        error_output: Combined stdout + stderr from Claude CLI
+
+    Returns:
+        Tuple of (is_rate_limited, reset_time_str)
+    """
+    # Pattern matches: "limit reached.*resets 3PM" or similar
+    rate_limit_match = re.search(
+        r"limit reached.*resets\s+(\d{1,2}[AP]M)", error_output, re.IGNORECASE
+    )
+
+    if rate_limit_match:
+        reset_time_str = rate_limit_match.group(1).strip()
+        logger.info("Rate limit detected, reset time: %s", reset_time_str)
+        return True, reset_time_str
+
+    return False, None
+
+
+def calculate_wait_time(reset_time_str: str) -> int:
+    """Calculate seconds to wait until reset time.
+
+    Args:
+        reset_time_str: Time string like "3PM" or "11AM"
+
+    Returns:
+        Seconds to wait (with 1-minute buffer)
+    """
+    try:
+        now = datetime.now()
+        # Parse time like "3PM" or "11AM"
+        reset_time_obj = datetime.strptime(reset_time_str, "%I%p")
+        reset_datetime = now.replace(
+            hour=reset_time_obj.hour,
+            minute=reset_time_obj.minute,
+            second=0,
+            microsecond=0,
+        )
+
+        # If reset time is in the past, add a day
+        if reset_datetime < now:
+            reset_datetime += timedelta(days=1)
+
+        # Add 1-minute buffer
+        wait_until = reset_datetime + timedelta(minutes=1)
+        wait_seconds = int((wait_until - now).total_seconds())
+
+        logger.info(
+            "Rate limit resets at %s, waiting until %s (%d seconds)",
+            reset_datetime.strftime("%I:%M%p"),
+            wait_until.strftime("%I:%M%p"),
+            wait_seconds,
+        )
+
+        return max(0, wait_seconds)
+
+    except ValueError as e:
+        # Fallback: wait 5 minutes if we can't parse the time
+        logger.warning(
+            "Could not parse reset time '%s': %s. Defaulting to 5-minute wait.",
+            reset_time_str,
+            e,
+        )
+        return 300
 
 
 def build_claude_command(
@@ -100,6 +172,8 @@ def run_claude_sync(
 ) -> ClaudeJSONResponse:
     """Run Claude CLI synchronously and return JSON response.
 
+    Automatically retries on rate limit if retry_on_rate_limit is True (default).
+
     Args:
         prompt: The prompt to send to Claude
         settings: Optional settings for Claude Code execution
@@ -111,6 +185,9 @@ def run_claude_sync(
         subprocess.CalledProcessError: If Claude CLI fails
         json.JSONDecodeError: If response is not valid JSON
     """
+    # Check if retry is enabled
+    retry_enabled = settings.get("retry_on_rate_limit", True) if settings else True
+
     # Determine working directory
     cwd = settings.get("working_directory") if settings else None
 
@@ -130,48 +207,84 @@ def run_claude_sync(
     # Build command (now references prompt.md)
     cmd = build_claude_command(settings=settings, output_format="json")
 
-    # Run command
-    logger.info("Running Claude CLI synchronously in %s", cwd)
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        check=True,
-        cwd=cwd,
-    )
+    # Retry loop for rate limiting
+    while True:
+        try:
+            # Run command
+            logger.info("Running Claude CLI synchronously in %s", cwd)
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,  # Don't raise on non-zero exit
+                cwd=cwd,
+            )
 
-    # Parse JSON response
-    # With --verbose, JSON output is an array of events with result event at the end
-    raw_response = json.loads(result.stdout)
+            # Check for rate limit error
+            if result.returncode != 0 and retry_enabled:
+                error_output = result.stdout + "\n" + result.stderr
+                is_rate_limited, reset_time = detect_rate_limit(error_output)
 
-    if isinstance(raw_response, list):
-        # Verbose mode: array of events - find the result event (usually last)
-        logger.debug("Received verbose JSON output with %d events", len(raw_response))
-        response = None
-        for event in raw_response:
-            if isinstance(event, dict) and event.get("type") == "result":
-                response = cast(ClaudeJSONResponse, event)
-                break
+                if is_rate_limited and reset_time:
+                    wait_seconds = calculate_wait_time(reset_time)
+                    wait_minutes = wait_seconds // 60
+                    logger.info(
+                        "Rate limit hit. Waiting %d minutes until reset...",
+                        wait_minutes,
+                    )
+                    time.sleep(wait_seconds)
+                    logger.info("Wait complete, retrying...")
+                    continue  # Retry the loop
 
-        if not response:
-            logger.error("No result event found in verbose output")
-            raise RuntimeError("No result event in Claude CLI output")
-    else:
-        # Non-verbose mode: single result object
-        response = cast(ClaudeJSONResponse, raw_response)
+            # If not rate-limited or retry disabled, check for errors
+            if result.returncode != 0:
+                logger.error(
+                    "Claude CLI failed with return code %d: %s",
+                    result.returncode,
+                    result.stderr,
+                )
+                raise RuntimeError(f"Claude CLI error: {result.stderr}")
 
-    logger.debug(
-        "Received response with %d tokens",
-        response.get("usage", {}).get("output_tokens", 0) if isinstance(response.get("usage"), dict) else 0,
-    )
+            # Parse JSON response
+            raw_response = json.loads(result.stdout)
 
-    # Check for error
-    if response.get("is_error"):
-        error_msg = response.get("error", "Unknown error")
-        logger.error("Claude CLI returned error: %s", error_msg)
-        raise RuntimeError(f"Claude CLI error: {error_msg}")
+            if isinstance(raw_response, list):
+                # Verbose mode: array of events - find the result event (usually last)
+                logger.debug(
+                    "Received verbose JSON output with %d events", len(raw_response)
+                )
+                response = None
+                for event in raw_response:
+                    if isinstance(event, dict) and event.get("type") == "result":
+                        response = cast(ClaudeJSONResponse, event)
+                        break
 
-    return response
+                if not response:
+                    logger.error("No result event found in verbose output")
+                    raise RuntimeError("No result event in Claude CLI output")
+            else:
+                # Non-verbose mode: single result object
+                response = cast(ClaudeJSONResponse, raw_response)
+
+            logger.debug(
+                "Received response with %d tokens",
+                response.get("usage", {}).get("output_tokens", 0)
+                if isinstance(response.get("usage"), dict)
+                else 0,
+            )
+
+            # Check for error
+            if response.get("is_error"):
+                error_msg = response.get("error", "Unknown error")
+                logger.error("Claude CLI returned error: %s", error_msg)
+                raise RuntimeError(f"Claude CLI error: {error_msg}")
+
+            return response
+
+        except (json.JSONDecodeError, KeyError) as e:
+            # JSON parsing error - not a rate limit, raise immediately
+            logger.error("Failed to parse Claude CLI response: %s", e)
+            raise
 
 
 async def run_claude_async(
@@ -180,6 +293,8 @@ async def run_claude_async(
     settings: ClaudeCodeSettings | None = None,
 ) -> ClaudeJSONResponse:
     """Run Claude CLI asynchronously and return JSON response.
+
+    Automatically retries on rate limit if retry_on_rate_limit is True (default).
 
     Args:
         prompt: The prompt to send to Claude
@@ -194,6 +309,9 @@ async def run_claude_async(
     """
     import asyncio
 
+    # Check if retry is enabled
+    retry_enabled = settings.get("retry_on_rate_limit", True) if settings else True
+
     # Determine working directory
     cwd = settings.get("working_directory") if settings else None
 
@@ -213,59 +331,87 @@ async def run_claude_async(
     # Build command (now references prompt.md)
     cmd = build_claude_command(settings=settings, output_format="json")
 
-    # Run command asynchronously
-    # stdin=DEVNULL because the CLI is non-interactive and should not read from stdin
-    logger.info("Running Claude CLI asynchronously in %s", cwd)
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        stdin=asyncio.subprocess.DEVNULL,
-        cwd=cwd,
-    )
+    # Retry loop for rate limiting
+    while True:
+        try:
+            # Run command asynchronously
+            # stdin=DEVNULL because the CLI is non-interactive and should not read from stdin
+            logger.info("Running Claude CLI asynchronously in %s", cwd)
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                stdin=asyncio.subprocess.DEVNULL,
+                cwd=cwd,
+            )
 
-    stdout, stderr = await process.communicate()
+            stdout, stderr = await process.communicate()
 
-    if process.returncode != 0:
-        logger.error(
-            "Claude CLI failed with return code %d: %s",
-            process.returncode,
-            stderr.decode(),
-        )
-        raise RuntimeError(f"Claude CLI error: {stderr.decode()}")
+            # Check for rate limit error
+            if process.returncode != 0 and retry_enabled:
+                error_output = stdout.decode() + "\n" + stderr.decode()
+                is_rate_limited, reset_time = detect_rate_limit(error_output)
 
-    # Parse JSON response
-    # With --verbose, JSON output is an array of events with result event at the end
-    raw_response = json.loads(stdout.decode())
+                if is_rate_limited and reset_time:
+                    wait_seconds = calculate_wait_time(reset_time)
+                    wait_minutes = wait_seconds // 60
+                    logger.info(
+                        "Rate limit hit. Waiting %d minutes until reset...",
+                        wait_minutes,
+                    )
+                    await asyncio.sleep(wait_seconds)
+                    logger.info("Wait complete, retrying...")
+                    continue  # Retry the loop
 
-    if isinstance(raw_response, list):
-        # Verbose mode: array of events - find the result event (usually last)
-        logger.debug("Received verbose JSON output with %d events", len(raw_response))
-        response = None
-        for event in raw_response:
-            if isinstance(event, dict) and event.get("type") == "result":
-                response = cast(ClaudeJSONResponse, event)
-                break
+            # If not rate-limited or retry disabled, check for errors
+            if process.returncode != 0:
+                logger.error(
+                    "Claude CLI failed with return code %d: %s",
+                    process.returncode,
+                    stderr.decode(),
+                )
+                raise RuntimeError(f"Claude CLI error: {stderr.decode()}")
 
-        if not response:
-            logger.error("No result event found in verbose output")
-            raise RuntimeError("No result event in Claude CLI output")
-    else:
-        # Non-verbose mode: single result object
-        response = cast(ClaudeJSONResponse, raw_response)
+            # Parse JSON response
+            raw_response = json.loads(stdout.decode())
 
-    logger.debug(
-        "Received response with %d output tokens",
-        response.get("usage", {}).get("output_tokens", 0) if isinstance(response.get("usage"), dict) else 0,
-    )
+            if isinstance(raw_response, list):
+                # Verbose mode: array of events - find the result event (usually last)
+                logger.debug(
+                    "Received verbose JSON output with %d events", len(raw_response)
+                )
+                response = None
+                for event in raw_response:
+                    if isinstance(event, dict) and event.get("type") == "result":
+                        response = cast(ClaudeJSONResponse, event)
+                        break
 
-    # Check for error
-    if response.get("is_error"):
-        error_msg = response.get("error", "Unknown error")
-        logger.error("Claude CLI returned error: %s", error_msg)
-        raise RuntimeError(f"Claude CLI error: {error_msg}")
+                if not response:
+                    logger.error("No result event found in verbose output")
+                    raise RuntimeError("No result event in Claude CLI output")
+            else:
+                # Non-verbose mode: single result object
+                response = cast(ClaudeJSONResponse, raw_response)
 
-    return response
+            logger.debug(
+                "Received response with %d output tokens",
+                response.get("usage", {}).get("output_tokens", 0)
+                if isinstance(response.get("usage"), dict)
+                else 0,
+            )
+
+            # Check for error
+            if response.get("is_error"):
+                error_msg = response.get("error", "Unknown error")
+                logger.error("Claude CLI returned error: %s", error_msg)
+                raise RuntimeError(f"Claude CLI error: {error_msg}")
+
+            return response
+
+        except (json.JSONDecodeError, KeyError) as e:
+            # JSON parsing error - not a rate limit, raise immediately
+            logger.error("Failed to parse Claude CLI response: %s", e)
+            raise
 
 
 def create_temp_workspace() -> Path:
@@ -442,9 +588,11 @@ async def run_claude_with_jq_pipeline(
             raise RuntimeError(
                 "jq is not installed. Install with: sudo apt-get install jq"
             )
-    except FileNotFoundError:
+    except FileNotFoundError as e:
         logger.error("jq is not available in PATH")
-        raise RuntimeError("jq is not installed. Install with: sudo apt-get install jq")
+        raise RuntimeError(
+            "jq is not installed. Install with: sudo apt-get install jq"
+        ) from e
 
     # Determine working directory
     cwd = settings.get("working_directory") if settings else None

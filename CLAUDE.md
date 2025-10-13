@@ -83,7 +83,7 @@ uv run python examples/advanced_example.py
 1. **ClaudeCodeProvider** (`provider.py`)
    - Manages configuration for Claude CLI execution
    - Handles working directory setup (including temporary workspaces)
-   - Configures tool permissions, max turns, and other CLI flags
+   - Configures tool permissions, max turns, rate limit retry, and other CLI flags
    - Provides context manager for automatic temp directory cleanup
 
 2. **ClaudeCodeModel** (`model.py`)
@@ -128,15 +128,18 @@ uv run python examples/advanced_example.py
 2. Prompts are written to `prompt.md` in the working directory
 3. Claude CLI is invoked with the command: `Follow the instructions in prompt.md`
 4. This approach ensures consistent handling of prompts regardless of length or special characters
-5. Temp directories are created with prefix `claude_prompt_*` in `/tmp/`
+5. System prompts (including JSON schemas for structured output and function tools) are also written to `prompt.md` to avoid argument list size limits (~128KB)
+6. User-specified `append_system_prompt` settings are included in the prompt file to avoid duplication
+7. Temp directories are created with prefix `claude_prompt_*` in `/tmp/`
 
-**Output File Strategy**: Both structured and unstructured outputs are written to temporary files:
-- **Unstructured output**: Written to `/tmp/claude_unstructured_output_<uuid>.txt`
-- **Structured output**: Written to `/tmp/claude_structured_output_<uuid>.json`
-- System prompt instructs Claude to write response to the specified file
-- Response is read from file and returned to Pydantic AI
+**Output File Strategy**: Only structured outputs require file writing:
+- **Unstructured output**: Captured directly from CLI stdout (no file needed - simpler and more reliable)
+- **Structured output**: Written to `/tmp/claude_structured_output_<uuid>.json` to ensure valid JSON
+- **Function call output**: Written to `/tmp/claude_function_call_<uuid>.json`
+- System prompt instructs Claude to write JSON to the specified file for validation
+- Response is read from file and validated before returning to Pydantic AI
 - Temporary files are cleaned up after reading
-- Fallback to CLI response text if file read fails
+- Fallback to CLI response text parsing if file read fails
 
 **Structured Output Strategy**: When Pydantic AI requests structured output (via `output_tools`):
 1. Inject detailed JSON schema + example into system prompt
@@ -145,31 +148,44 @@ uv run python examples/advanced_example.py
 4. Return as `ToolCallPart` with the output tool's name
 5. Fallback to robust JSON extraction from response text if file not created
 
-**Tool Calling Strategy**: When Pydantic AI provides function tools:
-1. Inject tool schemas and calling format into system prompt
-2. Parse Claude's response for `{"type": "tool_calls", ...}` JSON structure
-3. Convert to `ToolCallPart` objects with unique IDs
-4. Pydantic AI handles tool execution and result formatting
+**Tool Calling Strategy**: When Pydantic AI provides function tools, uses a two-phase protocol:
+1. **Phase 1 (No tool results yet)**: Inject function schemas into system prompt and request structured JSON output with function name and arguments written to temp file
+2. **Phase 2 (After tool execution)**: Format tool results as "Context:" entries and let Claude compose natural language response
+3. Tool call requests are omitted from conversation history to prevent Claude from repeating calls
+4. Supports both new file-based JSON format and legacy `EXECUTE: function_name(args)` text format for backwards compatibility
+5. Pydantic AI handles tool execution and result formatting between phases
 
 **Streaming Strategy**: Uses Claude CLI's `--output-format stream-json`:
 - Parses line-by-line JSON events (`text_delta`, `tool_use`, `result`)
 - Yields text chunks for `stream_text()`
 - Buffers structured output or tool calls for final validation
 
+**Rate Limit Strategy**: Automatically handles Claude CLI usage limits (enabled by default):
+- Detects rate limit errors from CLI output (pattern: "limit reached.*resets TIME")
+- Parses reset time from error message (e.g., "3PM", "11AM")
+- Calculates wait time until reset (with 1-minute buffer)
+- Sleeps until reset time, then automatically retries
+- Fallback: Waits 5 minutes if reset time cannot be parsed
+- Configurable via `retry_on_rate_limit` setting (default: True)
+- Works for both sync and async execution
+
 ## Important Implementation Notes
 
 - **Auto-registration**: The package registers itself on import, so users don't need to explicitly configure the provider
 - **Temp workspace default**: By default, `ClaudeCodeProvider` uses `use_temp_workspace=True` to mimic cloud provider isolation
 - **Permission handling**: Defaults to `dangerously_skip_permissions=True` for non-interactive use
+- **Rate limit retry**: Defaults to `retry_on_rate_limit=True` to automatically wait and retry when hitting usage limits
 - **Model names**: Supports short names (sonnet, opus, haiku) and full model IDs (claude-sonnet-4-5-20250929)
 - **CLI execution**: All requests shell out to the `claude` CLI binary (must be installed and authenticated)
 - **JSON extraction**: Uses multiple fallback strategies (file read, markdown block parsing, regex extraction, single-field wrapping) to robustly extract JSON from Claude's responses
+- **Unstructured output**: Captured directly from stdout without temp files for simplicity and reliability
 
 ## Testing Strategy
 
 Tests are in `tests/` directory:
 - `test_basic.py`: Basic queries, model variants (sonnet/opus/haiku), provider settings, temp workspace
 - `test_structured_output.py`: Structured responses with Pydantic models
+- `test_unstructured_output.py`: Plain text responses and file-based output handling
 - `test_tools.py`: Custom tool calling
 - `test_messages.py`: Message formatting
 - `test_utils.py`: CLI utilities
@@ -213,9 +229,11 @@ Log levels used:
 2. **Test CLI directly**: Run `claude --print --output-format json "What is 2+2?"` to verify CLI works
 3. **Enable debug logging**: Use `logging.getLogger('pydantic_ai_claude_code').setLevel(logging.DEBUG)` to see detailed execution
 4. **Check prompt files**: Prompts are written to `/tmp/claude_prompt_*/prompt.md` - examine these to verify prompt formatting
-5. **Check output files**:
-   - Unstructured output: `/tmp/claude_unstructured_output_*.txt`
+5. **Check output files** (for structured output only):
    - Structured output: `/tmp/claude_structured_output_*.json`
+   - Function call output: `/tmp/claude_function_call_*.json`
    - Note: Files are cleaned up after successful reads
+   - Unstructured output: No file created, captured from CLI stdout directly
 6. **Validate JSON manually**: If structured output fails, check the temp file exists and contains valid JSON
 7. **Fallback behavior**: If output files aren't created or can't be read, the system falls back to using CLI's direct response text
+8. **Rate limit handling**: If you see "Rate limit hit. Waiting N minutes..." messages in logs, the package is automatically handling rate limits - just wait for it to complete

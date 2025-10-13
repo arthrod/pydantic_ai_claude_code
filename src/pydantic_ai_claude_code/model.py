@@ -2,13 +2,15 @@
 
 from __future__ import annotations as _annotations
 
+import contextlib
 import json
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 from pydantic_ai.messages import (
     ModelMessage,
@@ -93,17 +95,9 @@ class ClaudeCodeModel(Model):
 
         logger.debug("Unstructured output file path: %s", output_filename)
 
-        instruction = f"""IMPORTANT: OUTPUT FILE INSTRUCTION
+        instruction = f"""Write your answer to: {output_filename}
 
-After completing your response, write your final answer to: {output_filename}
-
-INSTRUCTIONS:
-1. First, complete your analysis/work as needed
-2. Use the Write tool to create the file {output_filename}
-3. The file should contain your complete response in plain text
-4. Write only your final answer to the file (no preamble, no "here is the answer", just the content)
-
-Complete this task now."""
+Use the Write tool to create the file with your response. Write ONLY your direct answer - no preambles, no explanations, just the answer."""
 
         return instruction
 
@@ -237,14 +231,14 @@ Create the file now."""
                     "function_name": {
                         "type": "string",
                         "enum": [tool.name for tool in function_tools],
-                        "description": "The name of the function to call"
+                        "description": "The name of the function to call",
                     },
                     "arguments": {
                         "type": "object",
-                        "description": "The arguments to pass to the function"
-                    }
+                        "description": "The arguments to pass to the function",
+                    },
                 },
-                "required": ["function_name", "arguments"]
+                "required": ["function_name", "arguments"],
             }
 
             # Build description of available functions
@@ -276,11 +270,7 @@ Example:
 CRITICAL: Write ONLY valid JSON to the file. After creating the file, do NOT output anything else."""
 
             system_prompt_parts.append(function_call_instruction)
-        elif function_tools and has_tool_results:
-            # Second call after function execution: just let Claude compose response
-            # Add unstructured output instruction
-            unstructured_instruction = self._build_unstructured_output_instruction(settings)
-            system_prompt_parts.append(unstructured_instruction)
+        # No else needed - after function execution, Claude just composes natural response
 
         # Add output instructions (only if not in function call mode)
         if output_tools and not function_tools:
@@ -290,8 +280,7 @@ CRITICAL: Write ONLY valid JSON to the file. After creating the file, do NOT out
             )
             system_prompt_parts.append(json_instruction)
         elif not function_tools:
-            # Unstructured output (no function tools, no output tools): write to file
-            # For function tools, we parse JSON from stdout instead
+            # Unstructured output: instruct to write to file
             unstructured_instruction = self._build_unstructured_output_instruction(
                 settings
             )
@@ -303,7 +292,10 @@ CRITICAL: Write ONLY valid JSON to the file. After creating the file, do NOT out
             combined_system_prompt = "\n\n".join(system_prompt_parts)
             # Prepend system prompt to the conversation prompt
             prompt = f"{combined_system_prompt}\n\n{prompt}"
-            logger.debug("Added %d chars of system instructions to prompt", len(combined_system_prompt))
+            logger.debug(
+                "Added %d chars of system instructions to prompt",
+                len(combined_system_prompt),
+            )
 
         # Also include any user-specified append_system_prompt in the prompt file
         existing_prompt = settings.get("append_system_prompt")
@@ -311,7 +303,10 @@ CRITICAL: Write ONLY valid JSON to the file. After creating the file, do NOT out
             prompt = f"{existing_prompt}\n\n{prompt}"
             # Remove from settings so it's not duplicated as CLI arg
             settings.pop("append_system_prompt", None)
-            logger.debug("Added %d chars of user system prompt to prompt file", len(existing_prompt))
+            logger.debug(
+                "Added %d chars of user system prompt to prompt file",
+                len(existing_prompt),
+            )
 
         # Run Claude CLI
         response = await run_claude_async(prompt, settings=settings)
@@ -402,8 +397,7 @@ CRITICAL: Write ONLY valid JSON to the file. After creating the file, do NOT out
             )
             system_prompt_parts.append(json_instruction)
         elif not function_tools:
-            # Unstructured output (no function tools, no output tools): write to file
-            # For function tools, we parse JSON from stdout instead
+            # Unstructured output: instruct to write to file
             unstructured_instruction = self._build_unstructured_output_instruction(
                 settings
             )
@@ -415,7 +409,10 @@ CRITICAL: Write ONLY valid JSON to the file. After creating the file, do NOT out
             combined_system_prompt = "\n\n".join(system_prompt_parts)
             # Prepend system prompt to the conversation prompt
             prompt = f"{combined_system_prompt}\n\n{prompt}"
-            logger.debug("Added %d chars of system instructions to prompt", len(combined_system_prompt))
+            logger.debug(
+                "Added %d chars of system instructions to prompt",
+                len(combined_system_prompt),
+            )
 
         # Also include any user-specified append_system_prompt in the prompt file
         existing_prompt = settings.get("append_system_prompt")
@@ -423,7 +420,10 @@ CRITICAL: Write ONLY valid JSON to the file. After creating the file, do NOT out
             prompt = f"{existing_prompt}\n\n{prompt}"
             # Remove from settings so it's not duplicated as CLI arg
             settings.pop("append_system_prompt", None)
-            logger.debug("Added %d chars of user system prompt to prompt file", len(existing_prompt))
+            logger.debug(
+                "Added %d chars of user system prompt to prompt file",
+                len(existing_prompt),
+            )
 
         # Get working directory
         import tempfile
@@ -487,14 +487,20 @@ CRITICAL: Write ONLY valid JSON to the file. After creating the file, do NOT out
         # First, check for function tool calls (takes precedence)
         if function_tools:
             # Check if we have a function call file
-            function_call_file_obj = settings.get("__function_call_file") if settings else None
-            function_call_file = str(function_call_file_obj) if function_call_file_obj else None
+            function_call_file_obj = (
+                settings.get("__function_call_file") if settings else None
+            )
+            function_call_file = (
+                str(function_call_file_obj) if function_call_file_obj else None
+            )
 
             if function_call_file and Path(function_call_file).exists():
                 # Read function call from file
                 try:
-                    logger.debug("Reading function call from file: %s", function_call_file)
-                    with open(function_call_file, "r") as f:
+                    logger.debug(
+                        "Reading function call from file: %s", function_call_file
+                    )
+                    with open(function_call_file) as f:
                         function_call_data = json.load(f)
 
                     # Cleanup temp file
@@ -505,7 +511,11 @@ CRITICAL: Write ONLY valid JSON to the file. After creating the file, do NOT out
                     arguments = function_call_data.get("arguments", {})
 
                     if function_name:
-                        logger.debug("Parsed function call: %s with %d args", function_name, len(arguments))
+                        logger.debug(
+                            "Parsed function call: %s with %d args",
+                            function_name,
+                            len(arguments),
+                        )
                         tool_call = ToolCallPart(
                             tool_name=function_name,
                             args=arguments,
@@ -617,7 +627,10 @@ CRITICAL: Write ONLY valid JSON to the file. After creating the file, do NOT out
                 logger.error("Failed to parse structured output JSON: %s", e)
                 parts.append(TextPart(content=result_text))
         else:
-            # Unstructured text response - read from file
+            # Unstructured text response - read from file if Claude created it
+            logger.debug("Processing unstructured output")
+
+            # Check if we instructed Claude to write to a file
             unstructured_file_obj = (
                 settings.get("__unstructured_output_file") if settings else None
             )
@@ -626,12 +639,12 @@ CRITICAL: Write ONLY valid JSON to the file. After creating the file, do NOT out
             )
 
             if unstructured_file and Path(unstructured_file).exists():
-                # Read content from file
+                # Read content from file that Claude created
                 try:
                     logger.debug(
                         "Reading unstructured output from file: %s", unstructured_file
                     )
-                    with open(unstructured_file, "r") as f:
+                    with open(unstructured_file) as f:
                         file_content = f.read()
                     # Cleanup temp file
                     self._cleanup_temp_file(unstructured_file)
@@ -673,10 +686,8 @@ CRITICAL: Write ONLY valid JSON to the file. After creating the file, do NOT out
         Args:
             file_path: Path to file to remove
         """
-        try:
+        with contextlib.suppress(Exception):
             Path(file_path).unlink()
-        except Exception:
-            pass
 
     def _validate_json_schema(self, data: dict, schema: dict) -> str | None:
         """Validate JSON data against schema.
@@ -704,19 +715,20 @@ CRITICAL: Write ONLY valid JSON to the file. After creating the file, do NOT out
 
                 # Type checking
                 type_valid = True
-                if expected_type == "string" and not isinstance(actual_value, str):
-                    type_valid = False
-                elif expected_type == "integer" and not isinstance(actual_value, int):
-                    type_valid = False
-                elif expected_type == "number" and not isinstance(
-                    actual_value, (int, float)
+                if (
+                    expected_type == "string"
+                    and not isinstance(actual_value, str)
+                    or expected_type == "integer"
+                    and not isinstance(actual_value, int)
+                    or expected_type == "number"
+                    and not isinstance(actual_value, (int, float))
+                    or expected_type == "boolean"
+                    and not isinstance(actual_value, bool)
+                    or expected_type == "array"
+                    and not isinstance(actual_value, list)
+                    or expected_type == "object"
+                    and not isinstance(actual_value, dict)
                 ):
-                    type_valid = False
-                elif expected_type == "boolean" and not isinstance(actual_value, bool):
-                    type_valid = False
-                elif expected_type == "array" and not isinstance(actual_value, list):
-                    type_valid = False
-                elif expected_type == "object" and not isinstance(actual_value, dict):
                     type_valid = False
 
                 if not type_valid:
@@ -744,7 +756,7 @@ CRITICAL: Write ONLY valid JSON to the file. After creating the file, do NOT out
 
         # Read file
         try:
-            with open(file_path, "r") as f:
+            with open(file_path) as f:
                 file_content = f.read()
             logger.debug("Read %d bytes from structured output file", len(file_content))
         except Exception as e:
@@ -851,9 +863,12 @@ CRITICAL: Write ONLY valid JSON to the file. After creating the file, do NOT out
             # Try parsing as JSON first (could be array/object)
             try:
                 parsed_value = json.loads(cleaned)
-                if field_type == "array" and isinstance(parsed_value, list):
-                    return {field_name: parsed_value}
-                elif field_type == "object" and isinstance(parsed_value, dict):
+                if (
+                    field_type == "array"
+                    and isinstance(parsed_value, list)
+                    or field_type == "object"
+                    and isinstance(parsed_value, dict)
+                ):
                     return {field_name: parsed_value}
             except json.JSONDecodeError:
                 pass
@@ -874,9 +889,12 @@ CRITICAL: Write ONLY valid JSON to the file. After creating the file, do NOT out
             value = cleaned.strip()
 
             # Remove quotes
-            if value.startswith('"') and value.endswith('"'):
-                value = value[1:-1]
-            elif value.startswith("'") and value.endswith("'"):
+            if (
+                value.startswith('"')
+                and value.endswith('"')
+                or value.startswith("'")
+                and value.endswith("'")
+            ):
                 value = value[1:-1]
 
             # Type conversion
@@ -925,14 +943,30 @@ CRITICAL: Write ONLY valid JSON to the file. After creating the file, do NOT out
             Request usage information
         """
         usage_data = response.get("usage", {})
-        server_tool_use = usage_data.get("server_tool_use", {}) if isinstance(usage_data, dict) else {}
-        web_search_requests = server_tool_use.get("web_search_requests", 0) if isinstance(server_tool_use, dict) else 0
+        server_tool_use = (
+            usage_data.get("server_tool_use", {})
+            if isinstance(usage_data, dict)
+            else {}
+        )
+        web_search_requests = (
+            server_tool_use.get("web_search_requests", 0)
+            if isinstance(server_tool_use, dict)
+            else 0
+        )
 
         return RequestUsage(
-            input_tokens=usage_data.get("input_tokens", 0) if isinstance(usage_data, dict) else 0,
-            cache_write_tokens=usage_data.get("cache_creation_input_tokens", 0) if isinstance(usage_data, dict) else 0,
-            cache_read_tokens=usage_data.get("cache_read_input_tokens", 0) if isinstance(usage_data, dict) else 0,
-            output_tokens=usage_data.get("output_tokens", 0) if isinstance(usage_data, dict) else 0,
+            input_tokens=usage_data.get("input_tokens", 0)
+            if isinstance(usage_data, dict)
+            else 0,
+            cache_write_tokens=usage_data.get("cache_creation_input_tokens", 0)
+            if isinstance(usage_data, dict)
+            else 0,
+            cache_read_tokens=usage_data.get("cache_read_input_tokens", 0)
+            if isinstance(usage_data, dict)
+            else 0,
+            output_tokens=usage_data.get("output_tokens", 0)
+            if isinstance(usage_data, dict)
+            else 0,
             details={
                 "web_search_requests": web_search_requests,
                 "total_cost_usd_cents": int(

@@ -32,6 +32,7 @@ class ClaudeCodeProvider:
         verbose: bool = False,
         dangerously_skip_permissions: bool = True,
         use_temp_workspace: bool = True,
+        retry_on_rate_limit: bool = True,
     ):
         """Initialize Claude Code provider.
 
@@ -48,6 +49,7 @@ class ClaudeCodeProvider:
             verbose: Enable verbose output
             dangerously_skip_permissions: Skip all permission checks (default: True for non-interactive use)
             use_temp_workspace: If True, creates a temporary workspace directory (default: True to mimic cloud providers)
+            retry_on_rate_limit: If True, automatically wait and retry when rate limits are hit (default: True)
         """
         self.working_directory = working_directory
         self.allowed_tools = allowed_tools
@@ -60,15 +62,17 @@ class ClaudeCodeProvider:
         self.verbose = verbose
         self.dangerously_skip_permissions = dangerously_skip_permissions
         self.use_temp_workspace = use_temp_workspace
+        self.retry_on_rate_limit = retry_on_rate_limit
         self._temp_dir: Path | None = None
 
         logger.debug(
             "Initialized ClaudeCodeProvider with model=%s, working_directory=%s, "
-            "use_temp_workspace=%s, dangerously_skip_permissions=%s",
+            "use_temp_workspace=%s, dangerously_skip_permissions=%s, retry_on_rate_limit=%s",
             model,
             working_directory,
             use_temp_workspace,
             dangerously_skip_permissions,
+            retry_on_rate_limit,
         )
 
     def __enter__(self):
@@ -118,6 +122,7 @@ class ClaudeCodeProvider:
             "max_turns": self.max_turns,
             "verbose": self.verbose,
             "dangerously_skip_permissions": self.dangerously_skip_permissions,
+            "retry_on_rate_limit": self.retry_on_rate_limit,
         }
 
         # Apply overrides

@@ -113,6 +113,7 @@ class ClaudeCodeSettings(TypedDict, total=False):
     session_id: str | None
     verbose: bool
     dangerously_skip_permissions: bool
+    retry_on_rate_limit: bool
     __structured_output_file: str  # Internal: temp file path for structured output
     __unstructured_output_file: str  # Internal: temp file path for unstructured output
     __function_call_file: str  # Internal: temp file path for function call JSON
