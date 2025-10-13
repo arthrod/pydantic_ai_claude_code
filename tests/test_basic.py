@@ -6,6 +6,9 @@ from pydantic_ai import Agent
 
 from pydantic_ai_claude_code import ClaudeCodeProvider
 
+# Test constants
+EXPECTED_MATH_RESULT = 12  # 5 + 7
+
 
 class MathResult(BaseModel):
     """Math calculation result."""
@@ -54,7 +57,7 @@ def test_structured_output_sync():
     result = agent.run_sync("Calculate 5+7 and explain why.")
 
     assert isinstance(result.output, MathResult)
-    assert result.output.result == 12
+    assert result.output.result == EXPECTED_MATH_RESULT
     assert len(result.output.explanation) > 0
 
 
@@ -63,9 +66,11 @@ def test_provider_settings():
     from pydantic_ai_claude_code import ClaudeCodeModel
 
     provider = ClaudeCodeProvider(
-        model="sonnet",
-        max_turns=3,
-        verbose=False,
+        settings={
+            "model": "sonnet",
+            "max_turns": 3,
+            "verbose": False,
+        }
     )
 
     model = ClaudeCodeModel("sonnet", provider=provider)
@@ -79,7 +84,7 @@ def test_temp_workspace():
     """Test with temporary workspace (uses explicit model for provider testing)."""
     from pydantic_ai_claude_code import ClaudeCodeModel
 
-    with ClaudeCodeProvider(use_temp_workspace=True) as provider:
+    with ClaudeCodeProvider(settings={"use_temp_workspace": True}) as provider:
         assert provider.working_directory is not None
         assert provider._temp_dir is not None
 

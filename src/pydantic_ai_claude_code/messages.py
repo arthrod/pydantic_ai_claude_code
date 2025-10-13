@@ -17,16 +17,23 @@ from pydantic_ai.messages import (
 logger = logging.getLogger(__name__)
 
 
-def format_messages_for_claude(messages: list[ModelMessage]) -> str:
+def format_messages_for_claude(
+    messages: list[ModelMessage], *, skip_system_prompt: bool = False
+) -> str:
     """Convert Pydantic AI messages to a prompt string for Claude CLI.
 
     Args:
         messages: List of Pydantic AI messages
+        skip_system_prompt: If True, skip SystemPromptPart from messages (used when we have tool results)
 
     Returns:
         Formatted prompt string
     """
-    logger.debug("Formatting %d messages for Claude CLI", len(messages))
+    logger.debug(
+        "Formatting %d messages for Claude CLI (skip_system_prompt=%s)",
+        len(messages),
+        skip_system_prompt,
+    )
 
     parts: list[str] = []
 
@@ -34,8 +41,10 @@ def format_messages_for_claude(messages: list[ModelMessage]) -> str:
         if isinstance(message, ModelRequest):
             for req_part in message.parts:
                 if isinstance(req_part, SystemPromptPart):
-                    # System prompts are prepended
-                    parts.insert(0, f"System: {req_part.content}")
+                    # Skip system prompts if requested (e.g., after tool execution)
+                    if not skip_system_prompt:
+                        # System prompts are prepended
+                        parts.insert(0, f"System: {req_part.content}")
                 elif isinstance(req_part, UserPromptPart):
                     parts.append(f"User: {req_part.content}")
                 elif isinstance(req_part, ToolReturnPart):

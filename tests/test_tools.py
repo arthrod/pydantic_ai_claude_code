@@ -10,6 +10,10 @@ from pydantic_ai_claude_code.tools import (
     parse_tool_calls,
 )
 
+# Test constants
+EXPECTED_MULTIPLE_TOOL_CALLS = 2  # Expected number of tool calls in multi-call test
+ARCHIVED_CUSTOMER_ID = 12345  # Test customer ID for error handling
+
 
 def test_format_tools_for_prompt_empty():
     """Test formatting with no tools."""
@@ -97,7 +101,7 @@ def test_parse_tool_calls_valid_multiple():
     result = parse_tool_calls(response)
 
     assert result is not None
-    assert len(result) == 2
+    assert len(result) == EXPECTED_MULTIPLE_TOOL_CALLS
     assert result[0].tool_name == "tool1"
     assert result[1].tool_name == "tool2"
 
@@ -330,17 +334,17 @@ def test_agent_tool_with_context():
 def test_agent_tool_error_handling():
     """Test that tool errors are propagated correctly."""
 
-    def divide(a: int, b: int) -> float:
-        """Divide two numbers."""
-        if b == 0:
-            raise ValueError("Cannot divide by zero")
-        return a / b
+    def process_customer(customer_id: int) -> str:
+        """Process customer data from database."""
+        if customer_id == ARCHIVED_CUSTOMER_ID:
+            raise ValueError(f"Customer {ARCHIVED_CUSTOMER_ID} is archived and cannot be processed")
+        return f"Processed customer {customer_id}"
 
-    agent = Agent("claude-code:sonnet", tools=[divide])
+    agent = Agent("claude-code:sonnet", tools=[process_customer])
 
     # The error should be raised, not suppressed
-    with pytest.raises(ValueError, match="Cannot divide by zero"):
-        agent.run_sync("What is 10 divided by 0?")
+    with pytest.raises(ValueError, match="archived"):
+        agent.run_sync(f"Process data for customer ID {ARCHIVED_CUSTOMER_ID}")
 
 
 @pytest.mark.asyncio

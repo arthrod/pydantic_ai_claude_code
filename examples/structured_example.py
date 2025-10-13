@@ -1,7 +1,5 @@
 """Structured output example using Claude Code with Pydantic AI."""
 
-import pydantic_ai_claude_code  # Register the provider
-
 from pydantic import BaseModel
 from pydantic_ai import Agent
 
@@ -26,7 +24,7 @@ def main():
     # Example 1: Math result
     print("Example 1: Structured Math Result")
     print("-" * 50)
-    agent = Agent('claude-code:sonnet', output_type=MathResult)
+    agent = Agent("claude-code:sonnet", output_type=MathResult)
 
     result = agent.run_sync("Calculate 15 * 23")
     print(f"Answer: {result.output.answer}")
@@ -35,7 +33,7 @@ def main():
     # Example 2: Code analysis
     print("Example 2: Structured Code Analysis")
     print("-" * 50)
-    agent = Agent('claude-code:sonnet', output_type=CodeAnalysis)
+    agent = Agent("claude-code:sonnet", output_type=CodeAnalysis)
 
     result = agent.run_sync(
         "Analyze: def factorial(n): return 1 if n <= 1 else n * factorial(n-1)"

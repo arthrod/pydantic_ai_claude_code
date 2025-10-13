@@ -6,6 +6,9 @@ from pydantic_ai import Agent
 # Register the claude-code provider
 import pydantic_ai_claude_code  # noqa: F401
 
+# Test constants
+MIN_MULTILINE_OUTPUT_CHARS = 10  # Minimum chars for multiline output
+
 
 def test_simple_calculation():
     """Test simple math calculation."""
@@ -43,7 +46,7 @@ def test_multiline_response():
     agent = Agent("claude-code:haiku")
     result = agent.run_sync("Write 3 lines: line1, line2, line3")
     output = str(result.output)
-    assert len(output) > 10  # Should have substantial content
+    assert len(output) > MIN_MULTILINE_OUTPUT_CHARS  # Should have substantial content
 
 
 @pytest.mark.asyncio

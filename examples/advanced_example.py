@@ -1,7 +1,5 @@
 """Advanced example with custom provider configuration."""
 
-from pathlib import Path
-
 from pydantic import BaseModel
 from pydantic_ai import Agent
 
@@ -44,7 +42,9 @@ def main():
         agent = Agent(model)
 
         print(f"Working in: {temp_provider.working_directory}")
-        result = agent.run_sync("Create a simple hello.txt file with 'Hello, World!' in it")
+        result = agent.run_sync(
+            "Create a simple hello.txt file with 'Hello, World!' in it"
+        )
         print(f"Response: {result.output}")
 
     print("Temporary workspace cleaned up!\n")

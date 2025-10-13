@@ -74,6 +74,9 @@ uv run python examples/async_example.py
 
 # Advanced configuration example
 uv run python examples/advanced_example.py
+
+# Long response handling example
+uv run python examples/long_response_example.py
 ```
 
 ## Architecture
@@ -169,6 +172,48 @@ uv run python examples/advanced_example.py
 - Configurable via `retry_on_rate_limit` setting (default: True)
 - Works for both sync and async execution
 
+**Timeout Strategy**: Prevents indefinite hangs when Claude CLI takes too long (enabled by default):
+- Default timeout: 15 minutes (900 seconds)
+- Configurable via `timeout_seconds` setting in `ClaudeCodeSettings`
+- Async: Uses `asyncio.wait_for()` with automatic process cleanup on timeout
+- Sync: Uses `subprocess.run(timeout=...)` parameter
+- On timeout: Raises `RuntimeError` with elapsed time and actionable suggestions
+- Error messages include: prompt length, working directory, elapsed time
+- Suggests breaking tasks into smaller pieces for long-running operations
+
+**Long Response Strategy**: Handles responses that exceed typical output length limits by building content gradually:
+
+*For Unstructured Outputs:*
+1. Claude creates initial file with Write tool: `/tmp/claude_unstructured_output_<uuid>.txt`
+2. Builds response incrementally using bash append operations:
+   - `echo "additional content" >> file.txt`
+   - `cat << 'EOF' >> file.txt ... EOF` for multi-line content
+3. Avoids hitting output token limits by generating content in chunks
+4. System reads final file after completion
+5. Enables responses of unlimited length
+
+*For Structured Outputs:*
+1. Claude creates directory structure mirroring JSON schema: `/tmp/claude_json_fields_<uuid>/`
+2. For each field in the schema:
+   - **Scalar fields**: Creates `field_name.txt` file, builds content with append (`>>`)
+   - **Array fields**: Creates `field_name/` directory with numbered files (`0000.txt`, `0001.txt`, etc.)
+3. Content built gradually - no need to generate everything at once
+4. Creates `.complete` marker file when done
+5. System automatically assembles valid JSON from directory structure via `_assemble_json_from_directory()`:
+   - Reads all field files in lexicographic order
+   - Performs type conversion (string, integer, number, boolean)
+   - Constructs proper JSON object
+   - Validates against schema
+6. Claude never manually writes JSON syntax - eliminates syntax errors
+7. Scales to arbitrarily large responses (hundreds of array items, kilobytes of text per field)
+
+*Benefits:*
+- **No output limits**: Responses can be any size
+- **No JSON errors**: System handles JSON construction
+- **Natural workflow**: Claude builds content piece-by-piece naturally
+- **Reliable**: Robust file operations vs. fragile JSON generation
+- **max_output_tokens setting**: Optional limit via `ClaudeCodeSettings` (future-proofed for CLI support)
+
 ## Important Implementation Notes
 
 - **Auto-registration**: The package registers itself on import, so users don't need to explicitly configure the provider
@@ -189,6 +234,7 @@ Tests are in `tests/` directory:
 - `test_tools.py`: Custom tool calling
 - `test_messages.py`: Message formatting
 - `test_utils.py`: CLI utilities
+- `test_long_responses.py`: JSON assembly from directory structure, gradual file building, max_output_tokens
 
 All tests use `pytest` and `pytest-asyncio`. Tests make real calls to the local Claude CLI.
 
@@ -237,3 +283,9 @@ Log levels used:
 6. **Validate JSON manually**: If structured output fails, check the temp file exists and contains valid JSON
 7. **Fallback behavior**: If output files aren't created or can't be read, the system falls back to using CLI's direct response text
 8. **Rate limit handling**: If you see "Rate limit hit. Waiting N minutes..." messages in logs, the package is automatically handling rate limits - just wait for it to complete
+9. **Timeout errors**: If you get timeout errors:
+   - Check error message for elapsed time and prompt length
+   - Default timeout is 15 minutes (900 seconds)
+   - Increase timeout via `ClaudeCodeSettings`: `{"timeout_seconds": 1800}` for 30 minutes
+   - Consider breaking large tasks into smaller chunks
+   - Check logs for detailed timing information at ERROR level

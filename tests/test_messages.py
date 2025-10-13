@@ -15,6 +15,10 @@ from pydantic_ai_claude_code.messages import (
     format_messages_for_claude,
 )
 
+# Test constants for message counts
+EXPECTED_TOTAL_MESSAGES = 4  # Total messages in full conversation test
+EXPECTED_ASSISTANT_MESSAGES = 2  # Number of assistant messages in full conversation test
+
 
 def test_format_simple_user_message():
     """Test formatting a simple user message."""
@@ -154,8 +158,8 @@ def test_build_conversation_context_full():
 
     context = build_conversation_context(messages)
 
-    assert context["num_messages"] == 4
+    assert context["num_messages"] == EXPECTED_TOTAL_MESSAGES
     assert context["num_user_messages"] == 1
-    assert context["num_assistant_messages"] == 2
+    assert context["num_assistant_messages"] == EXPECTED_ASSISTANT_MESSAGES
     assert context["num_tool_calls"] == 1
     assert context["num_tool_returns"] == 1

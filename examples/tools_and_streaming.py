@@ -2,8 +2,6 @@
 
 import asyncio
 
-import pydantic_ai_claude_code  # Register the provider
-
 from pydantic_ai import Agent, RunContext
 
 
@@ -54,7 +52,7 @@ async def main():
     print("=" * 60)
 
     agent = Agent(
-        'claude-code:sonnet',
+        "claude-code:sonnet",
         tools=[get_weather, calculate],
         system_prompt="You are a helpful assistant with access to weather and calculator tools.",
     )
@@ -69,7 +67,7 @@ async def main():
     print("\n\nExample 2: Streaming Text Response")
     print("=" * 60)
 
-    stream_agent = Agent('claude-code:sonnet')
+    stream_agent = Agent("claude-code:sonnet")
 
     print("Streaming response:\n")
     async with stream_agent.run_stream(
@@ -96,15 +94,14 @@ async def main():
         return ctx.deps
 
     context_agent = Agent(
-        'claude-code:sonnet',
+        "claude-code:sonnet",
         deps_type=str,
         tools=[get_user_location, get_weather],
         system_prompt="Help users with weather information for their location.",
     )
 
     result = await context_agent.run(
-        "What's the weather like where I am?",
-        deps="London"
+        "What's the weather like where I am?", deps="London"
     )
     print(f"Response: {result.output}")
 

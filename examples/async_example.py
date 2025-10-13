@@ -45,7 +45,7 @@ async def main():
     # Run all questions concurrently
     answers = await asyncio.gather(*[ask_question(q) for q in questions])
 
-    for q, a in zip(questions, answers):
+    for q, a in zip(questions, answers, strict=False):
         print(f"Q: {q}")
         print(f"A: {a}\n")
 

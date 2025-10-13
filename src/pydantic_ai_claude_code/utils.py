@@ -14,6 +14,9 @@ from .types import ClaudeCodeSettings, ClaudeJSONResponse, ClaudeStreamEvent
 
 logger = logging.getLogger(__name__)
 
+# Constants
+LONG_RUNTIME_THRESHOLD_SECONDS = 600  # 10 minutes threshold for long runtime warnings
+
 
 def detect_rate_limit(error_output: str) -> tuple[bool, str | None]:
     """Detect rate limit error and extract reset time.
@@ -84,6 +87,70 @@ def calculate_wait_time(reset_time_str: str) -> int:
         return 300
 
 
+def _add_tool_permission_flags(cmd: list[str], settings: ClaudeCodeSettings) -> None:
+    """Add tool permission flags to command."""
+    allowed_tools = settings.get("allowed_tools")
+    if allowed_tools:
+        cmd.append("--allowed-tools")
+        cmd.extend(allowed_tools)
+
+    disallowed_tools = settings.get("disallowed_tools")
+    if disallowed_tools:
+        cmd.append("--disallowed-tools")
+        cmd.extend(disallowed_tools)
+
+
+def _add_model_flags(cmd: list[str], settings: ClaudeCodeSettings) -> None:
+    """Add model-related flags to command."""
+    model = settings.get("model")
+    if model:
+        cmd.extend(["--model", model])
+
+    fallback_model = settings.get("fallback_model")
+    if fallback_model:
+        cmd.extend(["--fallback-model", fallback_model])
+
+    max_turns = settings.get("max_turns")
+    if max_turns:
+        cmd.extend(["--max-turns", str(max_turns)])
+
+    session_id = settings.get("session_id")
+    if session_id:
+        cmd.extend(["--session-id", session_id])
+
+    max_output_tokens = settings.get("max_output_tokens")
+    if max_output_tokens:
+        cmd.extend(["--max-output-tokens", str(max_output_tokens)])
+        logger.debug("Setting max output tokens: %d", max_output_tokens)
+
+
+def _add_settings_flags(cmd: list[str], settings: ClaudeCodeSettings) -> None:
+    """Add settings-based flags to command.
+
+    Args:
+        cmd: Command list to modify
+        settings: Settings dict
+    """
+    # Tool permissions
+    _add_tool_permission_flags(cmd, settings)
+
+    # System prompt
+    append_system_prompt = settings.get("append_system_prompt")
+    if append_system_prompt:
+        cmd.extend(["--append-system-prompt", append_system_prompt])
+
+    # Permission mode (default to bypassPermissions for non-interactive use)
+    permission_mode = settings.get("permission_mode") or "bypassPermissions"
+    cmd.extend(["--permission-mode", permission_mode])
+
+    # Permission bypass
+    if settings.get("dangerously_skip_permissions"):
+        cmd.append("--dangerously-skip-permissions")
+
+    # Model settings
+    _add_model_flags(cmd, settings)
+
+
 def build_claude_command(
     *,
     settings: ClaudeCodeSettings | None = None,
@@ -103,66 +170,203 @@ def build_claude_command(
     settings = settings or {}
     cmd = ["claude", "--print"]
 
-    # Add output format
+    # Add format flags
     cmd.extend(["--output-format", output_format])
-
-    # Add input format if not text
     if input_format != "text":
         cmd.extend(["--input-format", input_format])
-
-    # For stream-json, add include-partial-messages for continuous progress
     if output_format == "stream-json":
         cmd.append("--include-partial-messages")
 
-    # Add settings
-    if settings.get("working_directory"):
-        # Claude CLI doesn't have a --cwd flag, so we'll handle this via subprocess cwd
-        pass
+    # Add settings-based flags
+    _add_settings_flags(cmd, settings)
 
-    allowed_tools = settings.get("allowed_tools")
-    if allowed_tools:
-        cmd.append("--allowed-tools")
-        cmd.extend(allowed_tools)
-
-    disallowed_tools = settings.get("disallowed_tools")
-    if disallowed_tools:
-        cmd.append("--disallowed-tools")
-        cmd.extend(disallowed_tools)
-
-    append_system_prompt = settings.get("append_system_prompt")
-    if append_system_prompt:
-        cmd.extend(["--append-system-prompt", append_system_prompt])
-
-    # Always set permission mode for non-interactive use
-    # Default to bypassPermissions since we cannot provide input (stdin=DEVNULL)
-    permission_mode = settings.get("permission_mode") or "bypassPermissions"
-    cmd.extend(["--permission-mode", permission_mode])
-
-    model = settings.get("model")
-    if model:
-        cmd.extend(["--model", model])
-
-    fallback_model = settings.get("fallback_model")
-    if fallback_model:
-        cmd.extend(["--fallback-model", fallback_model])
-
-    max_turns = settings.get("max_turns")
-    if max_turns:
-        cmd.extend(["--max-turns", str(max_turns)])
-
-    session_id = settings.get("session_id")
-    if session_id:
-        cmd.extend(["--session-id", session_id])
-
-    if settings.get("dangerously_skip_permissions"):
-        cmd.append("--dangerously-skip-permissions")
-
-    # Always reference prompt.md file
+    # Add prompt reference
     cmd.append("Follow the instructions in prompt.md")
 
     logger.debug("Built Claude command: %s", " ".join(cmd))
-
     return cmd
+
+
+def _setup_working_directory_and_prompt(
+    prompt: str, settings: ClaudeCodeSettings | None
+) -> str:
+    """Setup working directory and write prompt file.
+
+    Args:
+        prompt: The prompt text
+        settings: Optional settings
+
+    Returns:
+        Working directory path
+    """
+    cwd = settings.get("working_directory") if settings else None
+
+    if not cwd:
+        cwd = tempfile.mkdtemp(prefix="claude_prompt_")
+        logger.debug("Created temporary working directory: %s", cwd)
+
+    Path(cwd).mkdir(parents=True, exist_ok=True)
+
+    prompt_file = Path(cwd) / "prompt.md"
+    prompt_file.write_text(prompt)
+    logger.debug("Wrote prompt (%d chars) to %s", len(prompt), prompt_file)
+
+    return cwd
+
+
+def _execute_sync_command(
+    cmd: list[str], cwd: str, timeout_seconds: int
+) -> subprocess.CompletedProcess[str]:
+    """Execute command synchronously with timeout.
+
+    Args:
+        cmd: Command to execute
+        cwd: Working directory
+        timeout_seconds: Timeout in seconds
+
+    Returns:
+        Completed process result
+
+    Raises:
+        RuntimeError: On timeout
+    """
+    start_time = time.time()
+
+    try:
+        logger.info("Running Claude CLI synchronously in %s", cwd)
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=cwd,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        elapsed = time.time() - start_time
+        logger.error(
+            "Claude CLI timeout after %.1fs (limit: %ds). Working directory: %s",
+            elapsed,
+            timeout_seconds,
+            cwd,
+        )
+        raise RuntimeError(
+            f"Claude CLI timeout after {elapsed:.1f}s (limit: {timeout_seconds}s). "
+            f"Task took too long - consider breaking into smaller tasks or increasing timeout_seconds in settings."
+        ) from None
+
+
+def _check_rate_limit_and_retry(
+    result: subprocess.CompletedProcess[str], retry_enabled: bool
+) -> tuple[bool, int]:
+    """Check if command hit rate limit and should retry.
+
+    Args:
+        result: Subprocess result
+        retry_enabled: Whether retry is enabled
+
+    Returns:
+        Tuple of (should_retry, wait_seconds)
+    """
+    if result.returncode != 0 and retry_enabled:
+        error_output = result.stdout + "\n" + result.stderr
+        is_rate_limited, reset_time = detect_rate_limit(error_output)
+
+        if is_rate_limited and reset_time:
+            wait_seconds = calculate_wait_time(reset_time)
+            wait_minutes = wait_seconds // 60
+            logger.info("Rate limit hit. Waiting %d minutes until reset...", wait_minutes)
+            return True, wait_seconds
+
+    return False, 0
+
+
+def _handle_sync_command_failure(
+    result: subprocess.CompletedProcess[str], elapsed: float, prompt_len: int, cwd: str
+) -> None:
+    """Handle failed command execution.
+
+    Args:
+        result: Failed subprocess result
+        elapsed: Elapsed time in seconds
+        prompt_len: Length of prompt
+        cwd: Working directory
+
+    Raises:
+        RuntimeError: Always raises with appropriate error message
+    """
+    stderr_text = result.stderr if result.stderr else "(no error output)"
+    stdout_text = result.stdout[:500] if result.stdout else "(no stdout)"
+
+    logger.error(
+        "Claude CLI failed after %.1fs with return code %d\n"
+        "Prompt length: %d chars\n"
+        "Working dir: %s\n"
+        "Stderr: %s\n"
+        "Stdout (first 500 chars): %s",
+        elapsed,
+        result.returncode,
+        prompt_len,
+        cwd,
+        stderr_text,
+        stdout_text,
+    )
+
+    if elapsed > LONG_RUNTIME_THRESHOLD_SECONDS:
+        raise RuntimeError(
+            f"Claude CLI failed after {elapsed:.1f}s with return code {result.returncode}: {stderr_text}\n"
+            f"Long runtime suggests task complexity - consider breaking into smaller tasks."
+        )
+    else:
+        raise RuntimeError(f"Claude CLI error after {elapsed:.1f}s: {stderr_text}")
+
+
+def _parse_sync_json_response(raw_stdout: str) -> ClaudeJSONResponse:
+    """Parse JSON response from Claude CLI output.
+
+    Args:
+        raw_stdout: Raw stdout from CLI
+
+    Returns:
+        Parsed response
+
+    Raises:
+        RuntimeError: If no result event found
+    """
+    raw_response = json.loads(raw_stdout)
+
+    if isinstance(raw_response, list):
+        logger.debug("Received verbose JSON output with %d events", len(raw_response))
+        for event in raw_response:
+            if isinstance(event, dict) and event.get("type") == "result":
+                return cast(ClaudeJSONResponse, event)
+
+        logger.error("No result event found in verbose output")
+        raise RuntimeError("No result event in Claude CLI output")
+    else:
+        return cast(ClaudeJSONResponse, raw_response)
+
+
+def _validate_claude_response(response: ClaudeJSONResponse) -> None:
+    """Validate response and raise on errors.
+
+    Args:
+        response: Response to validate
+
+    Raises:
+        RuntimeError: If response contains error
+    """
+    logger.debug(
+        "Received response with %d tokens",
+        response.get("usage", {}).get("output_tokens", 0)
+        if isinstance(response.get("usage"), dict)
+        else 0,
+    )
+
+    if response.get("is_error"):
+        error_msg = response.get("error", "Unknown error")
+        logger.error("Claude CLI returned error: %s", error_msg)
+        raise RuntimeError(f"Claude CLI error: {error_msg}")
 
 
 def run_claude_sync(
@@ -185,106 +389,153 @@ def run_claude_sync(
         subprocess.CalledProcessError: If Claude CLI fails
         json.JSONDecodeError: If response is not valid JSON
     """
-    # Check if retry is enabled
     retry_enabled = settings.get("retry_on_rate_limit", True) if settings else True
+    timeout_seconds = settings.get("timeout_seconds", 900) if settings else 900
 
-    # Determine working directory
-    cwd = settings.get("working_directory") if settings else None
-
-    # If no working directory, create a temp one
-    if not cwd:
-        cwd = tempfile.mkdtemp(prefix="claude_prompt_")
-        logger.debug("Created temporary working directory: %s", cwd)
-
-    # Ensure working directory exists
-    Path(cwd).mkdir(parents=True, exist_ok=True)
-
-    # Write prompt to prompt.md in the working directory
-    prompt_file = Path(cwd) / "prompt.md"
-    prompt_file.write_text(prompt)
-    logger.debug("Wrote prompt (%d chars) to %s", len(prompt), prompt_file)
-
-    # Build command (now references prompt.md)
+    cwd = _setup_working_directory_and_prompt(prompt, settings)
     cmd = build_claude_command(settings=settings, output_format="json")
 
-    # Retry loop for rate limiting
     while True:
+        start_time = time.time()
+        result = _execute_sync_command(cmd, cwd, timeout_seconds)
+        elapsed = time.time() - start_time
+
+        should_retry, wait_seconds = _check_rate_limit_and_retry(result, retry_enabled)
+        if should_retry:
+            time.sleep(wait_seconds)
+            logger.info("Wait complete, retrying...")
+            continue
+
+        if result.returncode != 0:
+            _handle_sync_command_failure(result, elapsed, len(prompt), cwd)
+
+        response = _parse_sync_json_response(result.stdout)
+        _validate_claude_response(response)
+        return response
+
+
+async def _execute_async_command(
+    cmd: list[str], cwd: str, timeout_seconds: int
+) -> tuple[bytes, bytes, int]:
+    """Execute command asynchronously with timeout.
+
+    Args:
+        cmd: Command to execute
+        cwd: Working directory
+        timeout_seconds: Timeout in seconds
+
+    Returns:
+        Tuple of (stdout, stderr, returncode)
+
+    Raises:
+        RuntimeError: On timeout
+    """
+    import asyncio
+
+    start_time = time.time()
+    logger.info("Running Claude CLI asynchronously in %s", cwd)
+
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        stdin=asyncio.subprocess.DEVNULL,
+        cwd=cwd,
+    )
+
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(),
+            timeout=timeout_seconds,
+        )
+        return stdout, stderr, process.returncode or 0
+
+    except asyncio.TimeoutError:
         try:
-            # Run command
-            logger.info("Running Claude CLI synchronously in %s", cwd)
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=False,  # Don't raise on non-zero exit
-                cwd=cwd,
-            )
+            process.kill()
+            await process.wait()
+        except Exception:
+            pass
 
-            # Check for rate limit error
-            if result.returncode != 0 and retry_enabled:
-                error_output = result.stdout + "\n" + result.stderr
-                is_rate_limited, reset_time = detect_rate_limit(error_output)
+        elapsed = time.time() - start_time
+        logger.error(
+            "Claude CLI timeout after %.1fs (limit: %ds). Working directory: %s",
+            elapsed,
+            timeout_seconds,
+            cwd,
+        )
+        raise RuntimeError(
+            f"Claude CLI timeout after {elapsed:.1f}s (limit: {timeout_seconds}s). "
+            f"Task took too long - consider breaking into smaller tasks or increasing timeout_seconds in settings."
+        ) from None
 
-                if is_rate_limited and reset_time:
-                    wait_seconds = calculate_wait_time(reset_time)
-                    wait_minutes = wait_seconds // 60
-                    logger.info(
-                        "Rate limit hit. Waiting %d minutes until reset...",
-                        wait_minutes,
-                    )
-                    time.sleep(wait_seconds)
-                    logger.info("Wait complete, retrying...")
-                    continue  # Retry the loop
 
-            # If not rate-limited or retry disabled, check for errors
-            if result.returncode != 0:
-                logger.error(
-                    "Claude CLI failed with return code %d: %s",
-                    result.returncode,
-                    result.stderr,
-                )
-                raise RuntimeError(f"Claude CLI error: {result.stderr}")
+async def _check_rate_limit_and_retry_async(
+    stdout: bytes, stderr: bytes, returncode: int, retry_enabled: bool
+) -> tuple[bool, int]:
+    """Check if command hit rate limit and should retry (async version).
 
-            # Parse JSON response
-            raw_response = json.loads(result.stdout)
+    Args:
+        stdout: Process stdout
+        stderr: Process stderr
+        returncode: Process return code
+        retry_enabled: Whether retry is enabled
 
-            if isinstance(raw_response, list):
-                # Verbose mode: array of events - find the result event (usually last)
-                logger.debug(
-                    "Received verbose JSON output with %d events", len(raw_response)
-                )
-                response = None
-                for event in raw_response:
-                    if isinstance(event, dict) and event.get("type") == "result":
-                        response = cast(ClaudeJSONResponse, event)
-                        break
+    Returns:
+        Tuple of (should_retry, wait_seconds)
+    """
+    if returncode != 0 and retry_enabled:
+        error_output = stdout.decode() + "\n" + stderr.decode()
+        is_rate_limited, reset_time = detect_rate_limit(error_output)
 
-                if not response:
-                    logger.error("No result event found in verbose output")
-                    raise RuntimeError("No result event in Claude CLI output")
-            else:
-                # Non-verbose mode: single result object
-                response = cast(ClaudeJSONResponse, raw_response)
+        if is_rate_limited and reset_time:
+            wait_seconds = calculate_wait_time(reset_time)
+            wait_minutes = wait_seconds // 60
+            logger.info("Rate limit hit. Waiting %d minutes until reset...", wait_minutes)
+            return True, wait_seconds
 
-            logger.debug(
-                "Received response with %d tokens",
-                response.get("usage", {}).get("output_tokens", 0)
-                if isinstance(response.get("usage"), dict)
-                else 0,
-            )
+    return False, 0
 
-            # Check for error
-            if response.get("is_error"):
-                error_msg = response.get("error", "Unknown error")
-                logger.error("Claude CLI returned error: %s", error_msg)
-                raise RuntimeError(f"Claude CLI error: {error_msg}")
 
-            return response
+def _handle_async_command_failure(
+    process_output: tuple[bytes, bytes, int], elapsed: float, prompt_len: int, cwd: str
+) -> None:
+    """Handle failed async command execution.
 
-        except (json.JSONDecodeError, KeyError) as e:
-            # JSON parsing error - not a rate limit, raise immediately
-            logger.error("Failed to parse Claude CLI response: %s", e)
-            raise
+    Args:
+        process_output: Tuple of (stdout, stderr, returncode) from process
+        elapsed: Elapsed time in seconds
+        prompt_len: Length of prompt
+        cwd: Working directory
+
+    Raises:
+        RuntimeError: Always raises with appropriate error message
+    """
+    stdout, stderr, returncode = process_output
+    stderr_text = stderr.decode() if stderr else "(no error output)"
+    stdout_text = stdout.decode()[:500] if stdout else "(no stdout)"
+
+    logger.error(
+        "Claude CLI failed after %.1fs with return code %d\n"
+        "Prompt length: %d chars\n"
+        "Working dir: %s\n"
+        "Stderr: %s\n"
+        "Stdout (first 500 chars): %s",
+        elapsed,
+        returncode,
+        prompt_len,
+        cwd,
+        stderr_text,
+        stdout_text,
+    )
+
+    if elapsed > LONG_RUNTIME_THRESHOLD_SECONDS:
+        raise RuntimeError(
+            f"Claude CLI failed after {elapsed:.1f}s with return code {returncode}: {stderr_text}\n"
+            f"Long runtime suggests task complexity - consider breaking into smaller tasks."
+        )
+    else:
+        raise RuntimeError(f"Claude CLI error after {elapsed:.1f}s: {stderr_text}")
 
 
 async def run_claude_async(
@@ -309,109 +560,32 @@ async def run_claude_async(
     """
     import asyncio
 
-    # Check if retry is enabled
     retry_enabled = settings.get("retry_on_rate_limit", True) if settings else True
+    timeout_seconds = settings.get("timeout_seconds", 900) if settings else 900
 
-    # Determine working directory
-    cwd = settings.get("working_directory") if settings else None
-
-    # If no working directory, create a temp one
-    if not cwd:
-        cwd = tempfile.mkdtemp(prefix="claude_prompt_")
-        logger.debug("Created temporary working directory: %s", cwd)
-
-    # Ensure working directory exists
-    Path(cwd).mkdir(parents=True, exist_ok=True)
-
-    # Write prompt to prompt.md in the working directory
-    prompt_file = Path(cwd) / "prompt.md"
-    prompt_file.write_text(prompt)
-    logger.debug("Wrote prompt (%d chars) to %s", len(prompt), prompt_file)
-
-    # Build command (now references prompt.md)
+    cwd = _setup_working_directory_and_prompt(prompt, settings)
     cmd = build_claude_command(settings=settings, output_format="json")
 
-    # Retry loop for rate limiting
     while True:
-        try:
-            # Run command asynchronously
-            # stdin=DEVNULL because the CLI is non-interactive and should not read from stdin
-            logger.info("Running Claude CLI asynchronously in %s", cwd)
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                stdin=asyncio.subprocess.DEVNULL,
-                cwd=cwd,
-            )
+        start_time = time.time()
+        process_output = await _execute_async_command(cmd, cwd, timeout_seconds)
+        elapsed = time.time() - start_time
+        stdout, stderr, returncode = process_output
 
-            stdout, stderr = await process.communicate()
+        should_retry, wait_seconds = await _check_rate_limit_and_retry_async(
+            stdout, stderr, returncode, retry_enabled
+        )
+        if should_retry:
+            await asyncio.sleep(wait_seconds)
+            logger.info("Wait complete, retrying...")
+            continue
 
-            # Check for rate limit error
-            if process.returncode != 0 and retry_enabled:
-                error_output = stdout.decode() + "\n" + stderr.decode()
-                is_rate_limited, reset_time = detect_rate_limit(error_output)
+        if returncode != 0:
+            _handle_async_command_failure(process_output, elapsed, len(prompt), cwd)
 
-                if is_rate_limited and reset_time:
-                    wait_seconds = calculate_wait_time(reset_time)
-                    wait_minutes = wait_seconds // 60
-                    logger.info(
-                        "Rate limit hit. Waiting %d minutes until reset...",
-                        wait_minutes,
-                    )
-                    await asyncio.sleep(wait_seconds)
-                    logger.info("Wait complete, retrying...")
-                    continue  # Retry the loop
-
-            # If not rate-limited or retry disabled, check for errors
-            if process.returncode != 0:
-                logger.error(
-                    "Claude CLI failed with return code %d: %s",
-                    process.returncode,
-                    stderr.decode(),
-                )
-                raise RuntimeError(f"Claude CLI error: {stderr.decode()}")
-
-            # Parse JSON response
-            raw_response = json.loads(stdout.decode())
-
-            if isinstance(raw_response, list):
-                # Verbose mode: array of events - find the result event (usually last)
-                logger.debug(
-                    "Received verbose JSON output with %d events", len(raw_response)
-                )
-                response = None
-                for event in raw_response:
-                    if isinstance(event, dict) and event.get("type") == "result":
-                        response = cast(ClaudeJSONResponse, event)
-                        break
-
-                if not response:
-                    logger.error("No result event found in verbose output")
-                    raise RuntimeError("No result event in Claude CLI output")
-            else:
-                # Non-verbose mode: single result object
-                response = cast(ClaudeJSONResponse, raw_response)
-
-            logger.debug(
-                "Received response with %d output tokens",
-                response.get("usage", {}).get("output_tokens", 0)
-                if isinstance(response.get("usage"), dict)
-                else 0,
-            )
-
-            # Check for error
-            if response.get("is_error"):
-                error_msg = response.get("error", "Unknown error")
-                logger.error("Claude CLI returned error: %s", error_msg)
-                raise RuntimeError(f"Claude CLI error: {error_msg}")
-
-            return response
-
-        except (json.JSONDecodeError, KeyError) as e:
-            # JSON parsing error - not a rate limit, raise immediately
-            logger.error("Failed to parse Claude CLI response: %s", e)
-            raise
+        response = _parse_sync_json_response(stdout.decode())
+        _validate_claude_response(response)
+        return response
 
 
 def create_temp_workspace() -> Path:
@@ -441,7 +615,7 @@ def parse_stream_json_line(line: str) -> ClaudeStreamEvent | None:
         event = json.loads(line)
         if event.get("type"):
             logger.debug("Parsed stream event: type=%s", event["type"])
-        return event
+        return cast(ClaudeStreamEvent, event)
     except json.JSONDecodeError as e:
         logger.warning("Failed to parse stream JSON line: %s", e)
         return None
@@ -550,6 +724,99 @@ async def run_claude_with_prefill(
     raise RuntimeError("No result found in stream-json output")
 
 
+async def _check_jq_availability() -> None:
+    """Check if jq is available.
+
+    Raises:
+        RuntimeError: If jq is not installed
+    """
+    import asyncio
+
+    try:
+        jq_check = await asyncio.create_subprocess_exec(
+            "which",
+            "jq",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await jq_check.communicate()
+        if jq_check.returncode != 0:
+            logger.error("jq is not installed")
+            raise RuntimeError("jq is not installed. Install with: sudo apt-get install jq")
+    except FileNotFoundError as e:
+        logger.error("jq is not available in PATH")
+        raise RuntimeError("jq is not installed. Install with: sudo apt-get install jq") from e
+
+
+async def _run_claude_basic(
+    cmd: list[str], cwd: str
+) -> tuple[bytes, bytes, int]:
+    """Run Claude CLI without advanced error handling.
+
+    Args:
+        cmd: Command to execute
+        cwd: Working directory
+
+    Returns:
+        Tuple of (stdout, stderr, returncode)
+    """
+    import asyncio
+
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        stdin=asyncio.subprocess.DEVNULL,
+        cwd=cwd,
+    )
+
+    return (*await process.communicate(), process.returncode or 0)
+
+
+async def _extract_json_with_jq(result_text: str) -> str | None:
+    """Extract JSON from text using jq filters.
+
+    Args:
+        result_text: Text to extract JSON from
+
+    Returns:
+        Extracted JSON string or None if all strategies fail
+    """
+    import asyncio
+
+    jq_filters = [
+        ".",
+        'gsub("```json\\n"; "") | gsub("\\n```"; "") | gsub("```"; "") | fromjson',
+        'match("\\{[^}]+\\}") | .string | fromjson',
+        '[match("\\{[^}]+\\}"; "g")] | .[0].string | fromjson',
+    ]
+
+    for jq_filter in jq_filters:
+        try:
+            logger.debug("Trying jq filter: %s", jq_filter)
+            jq_process = await asyncio.create_subprocess_exec(
+                "jq",
+                "-r",
+                jq_filter,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            jq_stdout, _ = await jq_process.communicate(input=result_text.encode())
+
+            if jq_process.returncode == 0:
+                cleaned_result = jq_stdout.decode().strip()
+                json.loads(cleaned_result)  # Verify it's valid JSON
+                logger.debug("Successfully extracted JSON using jq filter: %s", jq_filter)
+                return cleaned_result
+        except (json.JSONDecodeError, Exception) as e:
+            logger.debug("jq filter failed: %s - %s", jq_filter, e)
+            continue
+
+    return None
+
+
 async def run_claude_with_jq_pipeline(
     prompt: str,
     *,
@@ -570,118 +837,28 @@ async def run_claude_with_jq_pipeline(
     Raises:
         RuntimeError: If jq is not available or JSON extraction fails
     """
-    import asyncio
-
     logger.info("Running Claude with jq JSON extraction pipeline")
 
-    # First check if jq is available
-    try:
-        jq_check = await asyncio.create_subprocess_exec(
-            "which",
-            "jq",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await jq_check.communicate()
-        if jq_check.returncode != 0:
-            logger.error("jq is not installed")
-            raise RuntimeError(
-                "jq is not installed. Install with: sudo apt-get install jq"
-            )
-    except FileNotFoundError as e:
-        logger.error("jq is not available in PATH")
-        raise RuntimeError(
-            "jq is not installed. Install with: sudo apt-get install jq"
-        ) from e
+    await _check_jq_availability()
 
-    # Determine working directory
-    cwd = settings.get("working_directory") if settings else None
-
-    # If no working directory, create a temp one
-    if not cwd:
-        cwd = tempfile.mkdtemp(prefix="claude_prompt_")
-
-    # Ensure working directory exists
-    Path(cwd).mkdir(parents=True, exist_ok=True)
-
-    # Write prompt to prompt.md in the working directory
-    prompt_file = Path(cwd) / "prompt.md"
-    prompt_file.write_text(prompt)
-
-    # Run Claude CLI
+    cwd = _setup_working_directory_and_prompt(prompt, settings)
     cmd = build_claude_command(settings=settings, output_format="json")
 
-    # stdin=DEVNULL because the CLI is non-interactive and should not read from stdin
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        stdin=asyncio.subprocess.DEVNULL,
-        cwd=cwd,
-    )
+    stdout, stderr, returncode = await _run_claude_basic(cmd, cwd)
 
-    stdout, stderr = await process.communicate()
-
-    if process.returncode != 0:
+    if returncode != 0:
         raise RuntimeError(f"Claude CLI error: {stderr.decode()}")
 
     response: ClaudeJSONResponse = json.loads(stdout.decode())
-
-    if response.get("is_error"):
-        error_msg = response.get("error", "Unknown error")
-        raise RuntimeError(f"Claude CLI error: {error_msg}")
+    _validate_claude_response(response)
 
     result_text = response.get("result", "")
-
-    # Use jq pipeline to extract JSON
-    # Strategy: Try multiple jq filters in order of preference
-    jq_filters = [
-        # 1. Try parsing directly
-        ".",
-        # 2. Remove markdown code blocks and parse
-        'gsub("```json\\n"; "") | gsub("\\n```"; "") | gsub("```"; "") | fromjson',
-        # 3. Extract first JSON object
-        'match("\\{[^}]+\\}") | .string | fromjson',
-        # 4. Extract from array of matches
-        '[match("\\{[^}]+\\}"; "g")] | .[0].string | fromjson',
-    ]
-
-    cleaned_result = None
-
-    for jq_filter in jq_filters:
-        try:
-            # Use jq to process
-            logger.debug("Trying jq filter: %s", jq_filter)
-            jq_process = await asyncio.create_subprocess_exec(
-                "jq",
-                "-r",
-                jq_filter,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-
-            jq_stdout, jq_stderr = await jq_process.communicate(
-                input=result_text.encode()
-            )
-
-            if jq_process.returncode == 0:
-                cleaned_result = jq_stdout.decode().strip()
-                # Verify it's valid JSON
-                json.loads(cleaned_result)
-                logger.debug(
-                    "Successfully extracted JSON using jq filter: %s", jq_filter
-                )
-                break
-        except (json.JSONDecodeError, Exception) as e:
-            logger.debug("jq filter failed: %s - %s", jq_filter, e)
-            continue
+    cleaned_result = await _extract_json_with_jq(result_text)
 
     if cleaned_result:
         response["result"] = cleaned_result
         logger.info("jq pipeline successfully cleaned JSON response")
-        return response
+    else:
+        logger.warning("All jq extraction strategies failed, returning original response")
 
-    # If all jq strategies fail, return original
-    logger.warning("All jq extraction strategies failed, returning original response")
     return response

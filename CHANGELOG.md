@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.4] - 2025-10-14
+
+### Fixed
+- **Function selection clarity**: Completely redesigned function selection prompt to eliminate confusion
+  - Changed from ambiguous "Available options" to clear numbered menu with explicit task description
+  - Added prominent disclaimer: "This is NOT asking you to execute these functions - you are only SELECTING"
+  - Provides step-by-step instructions and concrete examples with exact response format
+  - Clear separation between selection task and execution prevents Claude from looking for built-in tools
+  - Significantly improved test reliability: `test_agent_tool_with_context` now passes 80% of runs vs. 0% previously
+
+- **Markdown formatting in function selection**: Enhanced regex parsing to handle markdown bold/italic formatting
+  - Now correctly parses responses like `**CHOICE: function_name**` or `*CHOICE: function_name*`
+  - Strips `**`, `*`, and `_` characters around function names in CHOICE responses
+  - Makes parsing more robust against Claude's natural formatting preferences
+
+### Changed
+- **Code quality improvements**: Refactored complex functions to meet strict complexity limits
+  - Reduced `run_claude_sync` from 57 statements to 23 lines by extracting 6 helper functions
+  - Reduced `run_claude_async` from 68 statements to 27 lines by extracting 3 helper functions
+  - Reduced `run_claude_with_jq_pipeline` from 46 statements to 25 lines by extracting 3 helper functions
+  - All code now passes ruff PLR0915 (≤30 statements), PLR0912 (≤12 branches), PLR0913 (≤5 arguments)
+  - All code passes mypy strict type checking and pylint quality checks
+  - Improved maintainability with focused, single-responsibility helper methods
+
 ## [0.5.3] - 2025-10-13
 
 ### Added

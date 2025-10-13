@@ -114,6 +114,12 @@ class ClaudeCodeSettings(TypedDict, total=False):
     verbose: bool
     dangerously_skip_permissions: bool
     retry_on_rate_limit: bool
+    timeout_seconds: int  # Timeout for Claude CLI execution (default: 900 = 15 minutes)
+    max_output_tokens: int | None  # Max tokens in response (if CLI supports it)
     __structured_output_file: str  # Internal: temp file path for structured output
     __unstructured_output_file: str  # Internal: temp file path for unstructured output
     __function_call_file: str  # Internal: temp file path for function call JSON
+    __temp_json_dir: str  # Internal: temp directory path for JSON field assembly
+    __function_selection_mode__: bool  # Internal: whether function selection is active
+    __available_functions__: dict[str, Any]  # Internal: available function definitions
+    __selected_function__: str  # Internal: name of selected function

@@ -12,6 +12,10 @@ import pydantic_ai_claude_code  # noqa: F401
 logging.basicConfig(level=logging.DEBUG)
 logging.getLogger("pydantic_ai_claude_code").setLevel(logging.DEBUG)
 
+# Test constants for minimum output lengths
+MIN_MULTILINE_OUTPUT_CHARS = 10  # Minimum chars for multiline responses
+MIN_SHORT_OUTPUT_CHARS = 5  # Minimum chars for short responses
+
 
 def test_multiline_with_logging():
     """Test multiline response with full debug logging."""
@@ -24,7 +28,7 @@ def test_multiline_with_logging():
         print(f"Result type: {type(result.output)}")
         print(f"Result content: {result.output}")
         print(f"Result usage: {result.usage()}")
-        assert len(str(result.output)) > 10
+        assert len(str(result.output)) > MIN_MULTILINE_OUTPUT_CHARS
     except Exception as e:
         print("\n=== FAILURE ===")
         print(f"Exception type: {type(e).__name__}")
@@ -53,7 +57,7 @@ def test_numbered_list():
     )
     print(f"Result: {result.output}")
     output = str(result.output)
-    assert len(output) > 10
+    assert len(output) > MIN_MULTILINE_OUTPUT_CHARS
 
 
 def test_newline_explicit():
@@ -63,7 +67,7 @@ def test_newline_explicit():
     result = agent.run_sync("Write three words separated by newlines: cat\\ndog\\nbird")
     print(f"Result: {result.output}")
     output = str(result.output)
-    assert len(output) > 5
+    assert len(output) > MIN_SHORT_OUTPUT_CHARS
 
 
 def test_with_direct_model_call():
@@ -126,4 +130,4 @@ async def test_async_multiline():
     agent = Agent("claude-code:haiku")
     result = await agent.run("Write 3 lines: line1, line2, line3")
     print(f"Result: {result.output}")
-    assert len(str(result.output)) > 10
+    assert len(str(result.output)) > MIN_MULTILINE_OUTPUT_CHARS

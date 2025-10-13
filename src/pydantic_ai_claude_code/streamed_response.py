@@ -60,6 +60,83 @@ class ClaudeCodeStreamedResponse(StreamedResponse):
         """Get the timestamp."""
         return self._timestamp
 
+    def _handle_assistant_event(
+        self,
+        event: ClaudeStreamEvent,
+        text_started: bool,
+        full_text: str,
+    ) -> tuple[ModelResponseStreamEvent | None, bool, str]:
+        """Handle assistant message event.
+
+        Args:
+            event: Claude stream event
+            text_started: Whether text streaming has started
+            full_text: Full text accumulated so far
+
+        Returns:
+            Tuple of (stream_event, updated_text_started, updated_full_text)
+        """
+        message = event.get("message", {})
+        if not isinstance(message, dict):
+            return None, text_started, full_text
+
+        content = message.get("content", [])
+        if not isinstance(content, list):
+            return None, text_started, full_text
+
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                text = part.get("text", "")
+
+                if not text_started:
+                    # First chunk - send PartStartEvent
+                    logger.debug("Streaming first text chunk: %d chars", len(text))
+                    return (
+                        PartStartEvent(index=0, part=TextPart(content=text)),
+                        True,
+                        text,
+                    )
+
+                # Subsequent chunks - send delta
+                delta = text[len(full_text) :]
+                if delta:
+                    logger.debug("Streaming text delta: %d chars", len(delta))
+                    return (
+                        PartDeltaEvent(index=0, delta=TextPartDelta(content_delta=delta)),
+                        text_started,
+                        text,
+                    )
+
+        return None, text_started, full_text
+
+    def _handle_result_event(
+        self, event: ClaudeStreamEvent, event_count: int
+    ) -> FinalResultEvent:
+        """Handle result event.
+
+        Args:
+            event: Claude stream event
+            event_count: Number of events processed
+
+        Returns:
+            Final result event
+        """
+        usage_data = event.get("usage", {})
+        if isinstance(usage_data, dict):
+            self._usage = RequestUsage(
+                input_tokens=usage_data.get("input_tokens", 0),
+                cache_write_tokens=usage_data.get("cache_creation_input_tokens", 0),
+                cache_read_tokens=usage_data.get("cache_read_input_tokens", 0),
+                output_tokens=usage_data.get("output_tokens", 0),
+            )
+
+        logger.debug(
+            "Streaming completed: %d events, %d output tokens",
+            event_count,
+            self._usage.output_tokens if self._usage else 0,
+        )
+        return FinalResultEvent(tool_name=None, tool_call_id=None)
+
     async def _get_event_iterator(self) -> AsyncIterator[ModelResponseStreamEvent]:
         """Get event iterator for streaming.
 
@@ -76,60 +153,11 @@ class ClaudeCodeStreamedResponse(StreamedResponse):
             event_type = event.get("type")
 
             if event_type == "assistant":
-                # Extract text from assistant message
-                message = event.get("message", {})
-                if not isinstance(message, dict):
-                    continue
-
-                content = message.get("content", [])
-                if not isinstance(content, list):
-                    continue
-
-                for part in content:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        text = part.get("text", "")
-
-                        if not text_started:
-                            # First chunk - send PartStartEvent
-                            text_started = True
-                            logger.debug(
-                                "Streaming first text chunk: %d chars", len(text)
-                            )
-                            yield PartStartEvent(
-                                index=0,
-                                part=TextPart(content=text),
-                            )
-                            full_text = text
-                        else:
-                            # Subsequent chunks - send delta
-                            delta = text[len(full_text) :]
-                            if delta:
-                                logger.debug(
-                                    "Streaming text delta: %d chars", len(delta)
-                                )
-                                yield PartDeltaEvent(
-                                    index=0,
-                                    delta=TextPartDelta(content_delta=delta),
-                                )
-                                full_text = text
+                stream_event, text_started, full_text = self._handle_assistant_event(
+                    event, text_started, full_text
+                )
+                if stream_event:
+                    yield stream_event
 
             elif event_type == "result":
-                # Final result event
-                # Extract usage if available
-                usage_data = event.get("usage", {})
-                if isinstance(usage_data, dict):
-                    self._usage = RequestUsage(
-                        input_tokens=usage_data.get("input_tokens", 0),
-                        cache_write_tokens=usage_data.get(
-                            "cache_creation_input_tokens", 0
-                        ),
-                        cache_read_tokens=usage_data.get("cache_read_input_tokens", 0),
-                        output_tokens=usage_data.get("output_tokens", 0),
-                    )
-
-                logger.debug(
-                    "Streaming completed: %d events, %d output tokens",
-                    event_count,
-                    self._usage.output_tokens if self._usage else 0,
-                )
-                yield FinalResultEvent(tool_name=None, tool_call_id=None)
+                yield self._handle_result_event(event, event_count)
