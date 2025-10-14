@@ -37,6 +37,7 @@ class ClaudeCodeProvider:
                 - dangerously_skip_permissions: Skip permission checks (default: True)
                 - use_temp_workspace: Create temporary workspace (default: True)
                 - retry_on_rate_limit: Auto-retry on rate limits (default: True)
+                - timeout_seconds: Subprocess timeout in seconds (default: 900)
         """
         config = settings or {}
 
@@ -52,17 +53,19 @@ class ClaudeCodeProvider:
         self.dangerously_skip_permissions = config.get("dangerously_skip_permissions", True)
         self.use_temp_workspace = config.get("use_temp_workspace", True)
         self.retry_on_rate_limit = config.get("retry_on_rate_limit", True)
+        self.timeout_seconds = config.get("timeout_seconds", 900)
         self._temp_dir: Path | None = None
 
         logger.debug(
             "Initialized ClaudeCodeProvider with model=%s, "
             "working_directory=%s, use_temp_workspace=%s, "
-            "dangerously_skip_permissions=%s, retry_on_rate_limit=%s",
+            "dangerously_skip_permissions=%s, retry_on_rate_limit=%s, timeout_seconds=%s",
             self.model,
             self.working_directory,
             self.use_temp_workspace,
             self.dangerously_skip_permissions,
             self.retry_on_rate_limit,
+            self.timeout_seconds,
         )
 
     def __enter__(self) -> Self:
@@ -123,6 +126,7 @@ class ClaudeCodeProvider:
             "verbose": self.verbose,
             "dangerously_skip_permissions": self.dangerously_skip_permissions,
             "retry_on_rate_limit": self.retry_on_rate_limit,
+            "timeout_seconds": self.timeout_seconds,
         }
 
         # Apply overrides

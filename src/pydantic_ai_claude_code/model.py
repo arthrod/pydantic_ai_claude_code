@@ -483,14 +483,14 @@ Example format: {{"field1": "value1", "field2": "value2"}}"""
     async def request(
         self,
         messages: list[ModelMessage],
-        _model_settings: ModelSettings | None,
+        model_settings: ModelSettings | None,
         model_request_parameters: ModelRequestParameters,
     ) -> ModelResponse:
         """Make an async request to Claude Code CLI.
 
         Args:
             messages: List of messages in the conversation
-            model_settings: Optional model settings
+            model_settings: Optional model settings from Agent (can include timeout_seconds, etc.)
             model_request_parameters: Model request parameters
 
         Returns:
@@ -507,8 +507,11 @@ Example format: {{"field1": "value1", "field2": "value2"}}"""
             else 0,
         )
 
-        # Get settings and extract tool lists
+        # Get settings from provider and merge with model_settings from pydantic_ai
         settings = self.provider.get_settings(model=self._model_name)
+        if model_settings:
+            # Merge model_settings into provider settings (model_settings takes precedence)
+            settings.update(model_settings)
         output_tools = model_request_parameters.output_tools if model_request_parameters else []
         function_tools = model_request_parameters.function_tools if model_request_parameters else []
 
@@ -565,7 +568,7 @@ Example format: {{"field1": "value1", "field2": "value2"}}"""
     async def request_stream(
         self,
         messages: list[ModelMessage],
-        _model_settings: ModelSettings | None,
+        model_settings: ModelSettings | None,
         model_request_parameters: ModelRequestParameters,
         _run_context: Any | None = None,
     ) -> AsyncIterator[StreamedResponse]:
@@ -573,7 +576,7 @@ Example format: {{"field1": "value1", "field2": "value2"}}"""
 
         Args:
             messages: List of messages in the conversation
-            model_settings: Optional model settings
+            model_settings: Optional model settings from Agent (can include timeout_seconds, etc.)
             model_request_parameters: Model request parameters
             run_context: Optional run context
 
@@ -591,8 +594,11 @@ Example format: {{"field1": "value1", "field2": "value2"}}"""
             else 0,
         )
 
-        # Get settings and extract tool lists
+        # Get settings from provider and merge with model_settings from pydantic_ai
         settings = self.provider.get_settings(model=self._model_name)
+        if model_settings:
+            # Merge model_settings into provider settings (model_settings takes precedence)
+            settings.update(model_settings)
         output_tools = model_request_parameters.output_tools if model_request_parameters else []
         function_tools = model_request_parameters.function_tools if model_request_parameters else []
 
