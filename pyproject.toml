@@ -42,6 +42,7 @@ dev = [
     "mypy>=1.13.0",
     "pylint>=3.3.0",
     "bump-my-version>=1.2.4",
+    "pytest-rerunfailures>=16.1",
 ]
 
 [tool.ruff]

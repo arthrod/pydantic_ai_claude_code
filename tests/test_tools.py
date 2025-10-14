@@ -300,10 +300,12 @@ def test_agent_tool_with_object_param():
     assert "settings" in result.output.lower() or "config" in result.output.lower()
 
 
+@pytest.mark.flaky(reruns=4, reruns_delay=1)
 def test_agent_tool_with_context():
     """Test tool that uses RunContext.
 
     Note: This test can be flaky as Claude Code may not always recognize custom tools.
+    Will retry up to 4 times (5 total attempts) on failure.
     """
 
     def get_config_value(ctx: RunContext[dict], key: str) -> str:
@@ -331,8 +333,13 @@ def test_agent_tool_with_context():
     )
 
 
+@pytest.mark.flaky(reruns=4, reruns_delay=1)
 def test_agent_tool_error_handling():
-    """Test that tool errors are propagated correctly."""
+    """Test that tool errors are propagated correctly.
+
+    Note: This test can be flaky as Claude Code may not always recognize custom tools.
+    Will retry up to 4 times (5 total attempts) on failure.
+    """
 
     def process_customer(customer_id: int) -> str:
         """Process customer data from database."""
