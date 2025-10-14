@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Prompt instructions**: Simplified output generation prompts to remove explicit encouragement of appending content
+  - Unstructured output: Changed from multi-step "build gradually" strategy to concise "Write your answer" instruction
+  - Structured output: Removed "Build content gradually using append (>>)" section, changed to "Write content to files"
+  - Both prompts now focus on writing content without prescribing incremental appending
+  - Claude can still use append operations if needed, but it's no longer the recommended approach
+
 ## [0.5.6] - 2025-10-14
 
 ## [0.5.5] - 2025-10-14

@@ -94,17 +94,9 @@ class ClaudeCodeModel(Model):
 
         logger.debug("Unstructured output file path: %s", output_filename)
 
-        instruction = f"""IMPORTANT: Build your answer gradually in: {output_filename}
+        instruction = f"""IMPORTANT: Write your answer to: {output_filename}
 
-STRATEGY FOR LONG RESPONSES:
-1. Use the Write tool to create the file with the beginning of your response
-2. As you develop your answer, use bash to append additional content:
-   - Use: echo "additional content" >> {output_filename}
-   - Or: cat << 'EOF' >> {output_filename}
-     multi-line content here
-     EOF
-3. Build your response incrementally - don't try to generate everything at once
-4. This approach allows you to generate responses of any length without hitting limits
+Use the Write tool to create the file with your complete response.
 
 The file must contain ONLY your direct answer - no preambles, no meta-commentary, just the answer itself."""
 
@@ -174,9 +166,8 @@ STRATEGY - Create a file structure that mirrors the JSON:
 2. For each field, create files matching this structure:
 {chr(10).join(field_hints)}
 
-3. Build content gradually using append (>>):
+3. Write content to files:
    - String fields: echo "content" > {temp_data_dir}/field_name.txt
-                    echo "more content" >> {temp_data_dir}/field_name.txt
    - Number fields: echo "42" > {temp_data_dir}/field_name.txt
    - Boolean fields: echo "true" > {temp_data_dir}/field_name.txt
    - Array fields: mkdir -p {temp_data_dir}/field_name
@@ -189,9 +180,7 @@ STRATEGY - Create a file structure that mirrors the JSON:
 DO NOT manually create JSON or call jq - just build the file structure.
 The system will automatically assemble valid JSON from your files.
 
-Required fields: {list(properties.keys())}
-
-This approach lets you build responses of ANY size by appending content gradually."""
+Required fields: {list(properties.keys())}"""
 
         return json_instruction
 
