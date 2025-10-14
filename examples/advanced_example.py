@@ -22,7 +22,6 @@ def main():
 
     provider = ClaudeCodeProvider(
         allowed_tools=["Read", "Grep", "Glob"],  # Only allow read-only tools
-        max_turns=5,
         verbose=False,
         use_temp_workspace=False,  # Override default - no filesystem access needed
     )

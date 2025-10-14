@@ -110,7 +110,6 @@ provider = ClaudeCodeProvider(
     working_directory="/path/to/project",
     allowed_tools=["Read", "Edit", "Grep"],  # Restrict tool access
     permission_mode="acceptEdits",
-    max_turns=10,
     use_temp_workspace=False,  # Use specific directory instead of /tmp
 )
 

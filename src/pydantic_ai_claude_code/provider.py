@@ -32,7 +32,6 @@ class ClaudeCodeProvider:
                 - permission_mode: Permission mode ("acceptEdits", "bypassPermissions", "default", "plan")
                 - model: Model to use (e.g., "sonnet", "opus")
                 - fallback_model: Fallback model when primary is overloaded
-                - max_turns: Maximum number of agentic turns
                 - verbose: Enable verbose output (default: False)
                 - dangerously_skip_permissions: Skip permission checks (default: True)
                 - use_temp_workspace: Create temporary workspace (default: True)
@@ -48,7 +47,6 @@ class ClaudeCodeProvider:
         self.permission_mode = config.get("permission_mode")
         self.model = config.get("model")
         self.fallback_model = config.get("fallback_model")
-        self.max_turns = config.get("max_turns")
         self.verbose = config.get("verbose", False)
         self.dangerously_skip_permissions = config.get("dangerously_skip_permissions", True)
         self.use_temp_workspace = config.get("use_temp_workspace", True)
@@ -122,7 +120,6 @@ class ClaudeCodeProvider:
             "permission_mode": self.permission_mode,
             "model": self.model,
             "fallback_model": self.fallback_model,
-            "max_turns": self.max_turns,
             "verbose": self.verbose,
             "dangerously_skip_permissions": self.dangerously_skip_permissions,
             "retry_on_rate_limit": self.retry_on_rate_limit,

@@ -133,7 +133,7 @@ uv run python examples/long_response_example.py
 1. **ClaudeCodeProvider** (`provider.py`)
    - Manages configuration for Claude CLI execution
    - Handles working directory setup (including temporary workspaces)
-   - Configures tool permissions, max turns, rate limit retry, and other CLI flags
+   - Configures tool permissions, rate limit retry, and other CLI flags
    - Provides context manager for automatic temp directory cleanup
 
 2. **ClaudeCodeModel** (`model.py`)
@@ -259,7 +259,6 @@ uv run python examples/long_response_example.py
 - **No JSON errors**: System handles JSON construction
 - **Natural workflow**: Claude builds content piece-by-piece naturally
 - **Reliable**: Robust file operations vs. fragile JSON generation
-- **max_output_tokens setting**: Optional limit via `ClaudeCodeSettings` (future-proofed for CLI support)
 
 ## Important Implementation Notes
 
@@ -282,7 +281,7 @@ Tests are in `tests/` directory:
 - `test_tools.py`: Custom tool calling
 - `test_messages.py`: Message formatting
 - `test_utils.py`: CLI utilities
-- `test_long_responses.py`: JSON assembly from directory structure, gradual file building, max_output_tokens
+- `test_long_responses.py`: JSON assembly from directory structure, gradual file building
 
 All tests use `pytest` and `pytest-asyncio`. Tests make real calls to the local Claude CLI.
 

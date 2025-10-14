@@ -68,7 +68,6 @@ def test_provider_settings():
     provider = ClaudeCodeProvider(
         settings={
             "model": "sonnet",
-            "max_turns": 3,
             "verbose": False,
         }
     )

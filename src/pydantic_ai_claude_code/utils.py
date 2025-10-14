@@ -110,18 +110,9 @@ def _add_model_flags(cmd: list[str], settings: ClaudeCodeSettings) -> None:
     if fallback_model:
         cmd.extend(["--fallback-model", fallback_model])
 
-    max_turns = settings.get("max_turns")
-    if max_turns:
-        cmd.extend(["--max-turns", str(max_turns)])
-
     session_id = settings.get("session_id")
     if session_id:
         cmd.extend(["--session-id", session_id])
-
-    max_output_tokens = settings.get("max_output_tokens")
-    if max_output_tokens:
-        cmd.extend(["--max-output-tokens", str(max_output_tokens)])
-        logger.debug("Setting max output tokens: %d", max_output_tokens)
 
 
 def _add_settings_flags(cmd: list[str], settings: ClaudeCodeSettings) -> None:

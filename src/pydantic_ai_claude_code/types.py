@@ -109,13 +109,11 @@ class ClaudeCodeSettings(TypedDict, total=False):
     )
     model: str | None
     fallback_model: str | None
-    max_turns: int | None
     session_id: str | None
     verbose: bool
     dangerously_skip_permissions: bool
     retry_on_rate_limit: bool
     timeout_seconds: int  # Timeout for Claude CLI execution (default: 900 = 15 minutes)
-    max_output_tokens: int | None  # Max tokens in response (if CLI supports it)
     __structured_output_file: str  # Internal: temp file path for structured output
     __unstructured_output_file: str  # Internal: temp file path for unstructured output
     __function_call_file: str  # Internal: temp file path for function call JSON

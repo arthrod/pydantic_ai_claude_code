@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.5.7] - 2025-10-14
 
+### Removed
+- **Unsupported CLI flags**: Removed `--max-turns` and `--max-output-tokens` flags that were removed from Claude CLI
+  - Removed from `ClaudeCodeSettings` TypedDict
+  - Removed from `ClaudeCodeProvider.__init__()` and `get_settings()`
+  - Removed from command building in `utils.py`
+  - Removed from all examples, tests, and documentation
+  - These settings were no longer supported by the Claude CLI
+
 ### Changed
 - **Prompt instructions**: Simplified output generation prompts to remove explicit encouragement of appending content
   - Unstructured output: Changed from multi-step "build gradually" strategy to concise "Write your answer" instruction

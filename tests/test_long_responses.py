@@ -9,8 +9,6 @@ from pydantic_ai_claude_code.model import ClaudeCodeModel
 
 # Test constants
 LARGE_ARRAY_SIZE = 100  # Number of items for large array tests
-MAX_OUTPUT_TOKENS_TEST_VALUE_1 = 1000  # Test value for max_output_tokens
-MAX_OUTPUT_TOKENS_TEST_VALUE_2 = 500  # Test value for max_output_tokens
 
 
 class TestJSONAssembly:
@@ -342,32 +340,6 @@ class TestJSONAssembly:
         assert ">>" in instruction  # Append operator
         assert "cat <<" in instruction  # Heredoc
         assert "incrementally" in instruction
-
-
-class TestMaxOutputTokens:
-    """Test max_output_tokens setting."""
-
-    def test_max_output_tokens_in_settings(self):
-        """Test that max_output_tokens can be set in settings."""
-        from pydantic_ai_claude_code import ClaudeCodeProvider
-
-        provider = ClaudeCodeProvider()
-
-        # Pass max_output_tokens via overrides
-        settings = provider.get_settings(max_output_tokens=MAX_OUTPUT_TOKENS_TEST_VALUE_1)
-        assert settings.get("max_output_tokens") == MAX_OUTPUT_TOKENS_TEST_VALUE_1
-
-    def test_max_output_tokens_in_command(self):
-        """Test that max_output_tokens is included in CLI command."""
-        from pydantic_ai_claude_code.utils import build_claude_command
-
-        settings = {"max_output_tokens": MAX_OUTPUT_TOKENS_TEST_VALUE_2}
-
-        cmd = build_claude_command(settings=settings)
-
-        # Check that flag is in command
-        assert "--max-output-tokens" in cmd
-        assert str(MAX_OUTPUT_TOKENS_TEST_VALUE_2) in cmd
 
 
 class TestValidationErrors:

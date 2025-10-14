@@ -7,7 +7,6 @@ Key Features:
 1. Unstructured responses: Claude builds text gradually using file appending
 2. Structured responses: Claude creates a directory structure mirroring JSON
 3. Streaming: Real-time progress for long responses
-4. max_output_tokens: Control response length if needed
 """
 
 import asyncio
@@ -141,37 +140,13 @@ async def example_3_streaming_long_response():
     print(f"Usage: {result.usage()}")
 
 
-async def example_4_with_max_output_tokens():
-    """Example 4: Using max_output_tokens to control response length.
-
-    This is useful when you want to limit the length of responses.
-    Note: Claude CLI may not support this flag yet, but it's future-proofed.
-    """
-    print("\n" + "=" * 70)
-    print("Example 4: Controlled Response Length with max_output_tokens")
-    print("=" * 70)
-
-    # Create provider with token limit
-    provider = ClaudeCodeProvider({"max_output_tokens": 500})
-
-    agent = Agent("claude-code:sonnet", provider=provider)
-
-    result = await agent.run(
-        "Explain quantum computing in detail with examples and applications."
-    )
-
-    print(f"\nResponse length: {len(result.output)} characters")
-    print(f"\nResponse:\n{result.output}")
-    print(f"\nUsage: {result.usage()}")
-
-
-async def example_5_multiple_large_arrays():
-    """Example 5: Structured output with multiple large arrays.
+async def example_4_multiple_large_arrays():
+    """Example 4: Structured output with multiple large arrays.
 
     Demonstrates how the system handles complex structures with lots of data.
     """
     print("\n" + "=" * 70)
-    print("Example 5: Multiple Large Arrays in Structured Output")
+    print("Example 4: Multiple Large Arrays in Structured Output")
     print("=" * 70)
 
     class ComprehensiveReport(BaseModel):
@@ -241,8 +216,7 @@ This approach allows responses of ANY SIZE without hitting limits!
         await example_1_unstructured_long_response()
         await example_2_structured_with_large_data()
         await example_3_streaming_long_response()
-        await example_4_with_max_output_tokens()
-        await example_5_multiple_large_arrays()
+        await example_4_multiple_large_arrays()
 
     except Exception as e:
         print(f"\n\nError running examples: {e}")
@@ -272,10 +246,6 @@ This approach allows responses of ANY SIZE without hitting limits!
    - Arrays with 100s of items? No problem!
    - Multiple large fields? Handled naturally!
    - No manual JSON syntax needed!
-
-5. FUTURE-PROOFED:
-   - max_output_tokens setting ready for CLI support
-   - Fallback strategies for robustness
 """)
 
 

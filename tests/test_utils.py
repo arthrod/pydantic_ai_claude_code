@@ -19,7 +19,6 @@ def test_build_claude_command_with_settings():
     """Test building command with settings."""
     settings: ClaudeCodeSettings = {
         "model": "sonnet",
-        "max_turns": 5,
         "allowed_tools": ["Read", "Edit"],
         "permission_mode": "acceptEdits",
     }
@@ -28,8 +27,6 @@ def test_build_claude_command_with_settings():
 
     assert "--model" in cmd
     assert "sonnet" in cmd
-    assert "--max-turns" in cmd
-    assert "5" in cmd
     assert "--allowed-tools" in cmd
     assert "Read" in cmd
     assert "Edit" in cmd
