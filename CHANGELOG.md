@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.7] - 2025-10-14
+
 ### Changed
 - **Prompt instructions**: Simplified output generation prompts to remove explicit encouragement of appending content
   - Unstructured output: Changed from multi-step "build gradually" strategy to concise "Write your answer" instruction
