@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.5] - 2025-10-14
+
 ### Changed
 - **Version management**: `__version__` now dynamically reads from package metadata via `importlib.metadata`
   - Single source of truth in `pyproject.toml` - no need to maintain version in `__init__.py`
