@@ -47,7 +47,14 @@ logger.addHandler(logging.NullHandler())
 # Auto-register on import so users can use Agent('claude-code:sonnet')
 register_claude_code_model()
 
-__version__ = "0.1.0"
+# Get version from package metadata (single source of truth in pyproject.toml)
+try:
+    from importlib.metadata import version
+
+    __version__ = version("pydantic-ai-claude-code")
+except Exception:
+    # Fallback for development environments where package isn't installed
+    __version__ = "0.0.0.dev"
 
 __all__ = [
     "ClaudeCodeModel",

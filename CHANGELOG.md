@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Version management**: `__version__` now dynamically reads from package metadata via `importlib.metadata`
+  - Single source of truth in `pyproject.toml` - no need to maintain version in `__init__.py`
+  - Automated version bumping via `bump-my-version` tool
+  - Fallback to "0.0.0.dev" for development environments where package isn't installed
+
 ## [0.5.4] - 2025-10-14
 
 ### Fixed

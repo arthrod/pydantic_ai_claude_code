@@ -58,6 +58,53 @@ uv publish --publish-url https://test.pypi.org/legacy/
 
 **Note**: PyPI tokens are stored in `.pypi.token` (production) and `.pypi-test.token` (test) files. These are gitignored for security. The recommended approach is to use the `--token` flag or `UV_PUBLISH_TOKEN` environment variable.
 
+### Version Management
+
+The project uses `bump-my-version` for automated version management. Version is maintained in a single place (`pyproject.toml`) and automatically propagated.
+
+**How it works:**
+- Version is stored in `pyproject.toml` as the single source of truth
+- `__init__.py` dynamically reads version from package metadata via `importlib.metadata.version()`
+- `bump-my-version` automatically updates:
+  - `pyproject.toml` version field
+  - `CHANGELOG.md` - adds new version section with date
+  - `.bumpversion.toml` - tracks current version
+
+**Release workflow:**
+```bash
+# 1. Make your changes and add them to the "Unreleased" section in CHANGELOG.md
+
+# 2. Bump the version (this creates a git commit and tag automatically)
+uv run bump-my-version bump patch  # 0.5.4 -> 0.5.5
+uv run bump-my-version bump minor  # 0.5.4 -> 0.6.0
+uv run bump-my-version bump major  # 0.5.4 -> 1.0.0
+
+# 3. Push to GitHub (including tags)
+git push && git push --tags
+
+# 4. Build and publish
+uv build
+uv publish --token $(cat .pypi.token)
+```
+
+**Development workflow (with uncommitted changes):**
+```bash
+# Test what changes would be made (dry run)
+uv run bump-my-version bump patch --dry-run --allow-dirty --verbose
+
+# Commit your changes first, then bump
+git add .
+git commit -m "Your changes"
+uv run bump-my-version bump patch
+```
+
+**Important notes:**
+- By default, `bump-my-version` requires a clean git working directory
+- Use `--allow-dirty` flag to bypass this (useful for testing)
+- The tool automatically creates a commit with message: "Bump version: X.Y.Z → X.Y.Z+1"
+- It also creates a git tag in format `vX.Y.Z`
+- After bumping, rebuild the package (`uv build`) for `__version__` to reflect the new version
+
 ### Running Examples
 ```bash
 # Basic usage example
@@ -217,6 +264,7 @@ uv run python examples/long_response_example.py
 ## Important Implementation Notes
 
 - **Auto-registration**: The package registers itself on import, so users don't need to explicitly configure the provider
+- **Version management**: `__version__` is dynamically read from package metadata - single source of truth in `pyproject.toml`, managed via `bump-my-version` tool
 - **Temp workspace default**: By default, `ClaudeCodeProvider` uses `use_temp_workspace=True` to mimic cloud provider isolation
 - **Permission handling**: Defaults to `dangerously_skip_permissions=True` for non-interactive use
 - **Rate limit retry**: Defaults to `retry_on_rate_limit=True` to automatically wait and retry when hitting usage limits
