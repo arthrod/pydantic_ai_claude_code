@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.5.9] - 2025-10-15
 
+### Fixed
+- **True incremental streaming**: Fixed streaming to deliver chunks in real-time as Claude generates them, not all at once after completion
+  - Implemented background task pattern using `asyncio.create_task()` to consume CLI stream concurrently
+  - Both Pydantic AI's internal code and user's `stream_text()` now read from a shared, growing buffer
+  - Events are buffered as they arrive from CLI with polling-based iteration
+  - Added `<<<STREAM_START>>>` marker to distinguish final response from tool-use messages
+  - Text now appears incrementally with realistic delays (100-400ms between chunks)
+  - Previously all text appeared at once after ~10 second delay despite CLI sending events incrementally
+
+### Added
+- **Comprehensive streaming tests**: New `test_streaming_behavior.py` with 5 tests verifying:
+  - Incremental delivery with realistic timing gaps between chunks
+  - Tool-use message filtering (only final response is streamed)
+  - Complete response delivery with cumulative chunks
+  - Usage tracking availability after completion
+  - Background task concurrent consumption
+
+### Changed
+- **Code quality improvements**: Refactored to meet strict project standards
+  - Reduced `_consume_stream_background()` from 52 statements to 30 by extracting `_process_marker_and_text()` helper
+  - Reduced `_build_system_prompt_parts()` from 6 arguments to 4 by extracting tools from `model_request_parameters`
+  - Added test constants for magic numbers (MIN_CHUNKS_FOR_STREAMING, MAX_TIME_TO_FIRST_CHUNK_MS, etc.)
+  - All code passes ruff checks (≤30 statements, ≤12 branches, ≤5 arguments)
+
 ## [0.5.8] - 2025-10-14
 
 ## [0.5.7] - 2025-10-14
