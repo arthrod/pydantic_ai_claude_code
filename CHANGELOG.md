@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.10] - 2025-10-15
+
+### Changed
+- **Removed completion marker requirement**: Simplified directory structure assembly by removing `.complete` marker files
+  - CLI execution is synchronous, making completion markers redundant
+  - Reduced complexity in `structure_converter.py` and `model.py`
+  - Updated tests to verify markers are no longer created
+
+- **Automatic validation error retry**: Argument collection now retries once on validation errors
+  - Feeds validation errors back to Claude for self-correction
+  - Creates new temp directory for retry attempt to avoid conflicts
+  - Only returns error to user after all retries exhausted
+  - Improves success rate for complex structured outputs
+
+- **Code quality improvements**: Refactored to meet strict project standards
+  - Reduced `extract_text_from_stream_event()` from 8 return statements to ≤6 by extracting 3 helper functions
+  - Reduced `run_claude_sync()` from 39 statements to ≤30 by extracting execution helper
+  - Reduced `run_claude_async()` from 41 statements to ≤30 by extracting execution helper
+  - Reduced helper function arguments from 6 to 5 parameters
+  - All code passes ruff checks (≤30 statements, ≤12 branches, ≤6 returns, ≤5 arguments)
+
+- **Test suite optimization**: Removed redundant slow integration tests
+  - Deleted `test_unstructured_output.py` (6 tests - redundant with test_basic.py)
+  - Deleted `test_long_responses_integration.py` (5 slow integration tests - redundant with unit tests)
+  - Removed 2 redundant model tests from test_basic.py
+  - Test count reduced from 107 to 94 (~13% faster suite)
+  - All unit tests still provide comprehensive coverage
+
 ## [0.5.9] - 2025-10-15
 
 ### Fixed

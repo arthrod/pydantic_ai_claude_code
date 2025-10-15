@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 # Constants
 LONG_RUNTIME_THRESHOLD_SECONDS = 600  # 10 minutes threshold for long runtime warnings
+MAX_CLI_RETRIES = 3  # Maximum retries for transient CLI infrastructure failures
+RETRY_BACKOFF_BASE = 2  # Exponential backoff base (seconds)
 
 
 def resolve_claude_cli_path(settings: ClaudeCodeSettings | None = None) -> str:
@@ -133,6 +135,27 @@ def calculate_wait_time(reset_time_str: str) -> int:
             e,
         )
         return 300
+
+
+def detect_cli_infrastructure_failure(stderr: str) -> bool:
+    """Detect transient Claude CLI infrastructure failures that should trigger retry.
+
+    Args:
+        stderr: Error output from Claude CLI
+
+    Returns:
+        True if error indicates retryable infrastructure failure
+    """
+    # Node.js module loading errors (e.g., missing yoga.wasm)
+    if "Cannot find module" in stderr:
+        return True
+
+    # Node.js module resolution errors
+    if "MODULE_NOT_FOUND" in stderr:
+        return True
+
+    # Other transient errors
+    return bool("ENOENT" in stderr or "EACCES" in stderr)
 
 
 def _add_tool_permission_flags(cmd: list[str], settings: ClaudeCodeSettings) -> None:
@@ -416,6 +439,46 @@ def _validate_claude_response(response: ClaudeJSONResponse) -> None:
         raise RuntimeError(f"Claude CLI error: {error_msg}")
 
 
+def _try_sync_execution_with_rate_limit_retry(
+    cmd: list[str],
+    cwd: str,
+    timeout_seconds: int,
+    retry_enabled: bool,
+    prompt_len: int,
+) -> tuple[ClaudeJSONResponse | None, bool]:
+    """Try command execution with rate limit retry.
+
+    Returns:
+        Tuple of (response if successful or None, should_retry_infra)
+    """
+    while True:
+        start_time = time.time()
+        result = _execute_sync_command(cmd, cwd, timeout_seconds)
+        elapsed = time.time() - start_time
+
+        # Check rate limit first
+        should_retry, wait_seconds = _check_rate_limit_and_retry(result, retry_enabled)
+        if should_retry:
+            time.sleep(wait_seconds)
+            logger.info("Wait complete, retrying...")
+            continue
+
+        # Check for infrastructure failures
+        if result.returncode != 0:
+            stderr_text = result.stderr if result.stderr else ""
+            if detect_cli_infrastructure_failure(stderr_text):
+                # Signal to retry in outer loop
+                return None, True
+
+            # Not an infrastructure failure - handle as usual
+            _handle_sync_command_failure(result, elapsed, prompt_len, cwd)
+
+        # Success - parse and return
+        response = _parse_sync_json_response(result.stdout)
+        _validate_claude_response(response)
+        return response, False
+
+
 def run_claude_sync(
     prompt: str,
     *,
@@ -424,6 +487,7 @@ def run_claude_sync(
     """Run Claude CLI synchronously and return JSON response.
 
     Automatically retries on rate limit if retry_on_rate_limit is True (default).
+    Also retries on transient CLI infrastructure failures (e.g., missing modules).
 
     Args:
         prompt: The prompt to send to Claude
@@ -442,23 +506,57 @@ def run_claude_sync(
     cwd = _setup_working_directory_and_prompt(prompt, settings)
     cmd = build_claude_command(settings=settings, output_format="json")
 
-    while True:
-        start_time = time.time()
-        result = _execute_sync_command(cmd, cwd, timeout_seconds)
-        elapsed = time.time() - start_time
+    # Outer retry loop for infrastructure failures
+    for attempt in range(MAX_CLI_RETRIES):
+        try:
+            response, should_retry_infra = _try_sync_execution_with_rate_limit_retry(
+                cmd, cwd, timeout_seconds, retry_enabled, len(prompt)
+            )
+            if response:
+                return response
 
-        should_retry, wait_seconds = _check_rate_limit_and_retry(result, retry_enabled)
-        if should_retry:
-            time.sleep(wait_seconds)
-            logger.info("Wait complete, retrying...")
-            continue
+            # Infrastructure failure detected
+            if should_retry_infra and attempt < MAX_CLI_RETRIES - 1:
+                backoff_seconds = RETRY_BACKOFF_BASE ** attempt
+                logger.warning(
+                    "Claude CLI infrastructure failure detected (attempt %d/%d). "
+                    "Retrying in %d seconds...",
+                    attempt + 1,
+                    MAX_CLI_RETRIES,
+                    backoff_seconds,
+                )
+                time.sleep(backoff_seconds)
+                continue
+            elif should_retry_infra:
+                # Final attempt failed
+                logger.error(
+                    "Claude CLI infrastructure failure persisted after %d attempts",
+                    MAX_CLI_RETRIES,
+                )
+                raise RuntimeError("Claude CLI infrastructure failure persisted")
 
-        if result.returncode != 0:
-            _handle_sync_command_failure(result, elapsed, len(prompt), cwd)
+        except RuntimeError as e:
+            # If this is the last attempt or not an infrastructure error, re-raise
+            if attempt >= MAX_CLI_RETRIES - 1:
+                raise
+            # Check if the error is due to infrastructure failure
+            error_str = str(e)
+            if detect_cli_infrastructure_failure(error_str):
+                backoff_seconds = RETRY_BACKOFF_BASE ** attempt
+                logger.warning(
+                    "Claude CLI infrastructure failure in execution (attempt %d/%d). "
+                    "Retrying in %d seconds...",
+                    attempt + 1,
+                    MAX_CLI_RETRIES,
+                    backoff_seconds,
+                )
+                time.sleep(backoff_seconds)
+                continue
+            # Not an infrastructure error - re-raise immediately
+            raise
 
-        response = _parse_sync_json_response(result.stdout)
-        _validate_claude_response(response)
-        return response
+    # Should never reach here, but just in case
+    raise RuntimeError("Claude CLI failed after maximum retry attempts")
 
 
 async def _execute_async_command(
@@ -585,6 +683,51 @@ def _handle_async_command_failure(
         raise RuntimeError(f"Claude CLI error after {elapsed:.1f}s: {stderr_text}")
 
 
+async def _try_async_execution_with_rate_limit_retry(
+    cmd: list[str],
+    cwd: str,
+    timeout_seconds: int,
+    retry_enabled: bool,
+    prompt_len: int,
+) -> tuple[ClaudeJSONResponse | None, bool]:
+    """Try async command execution with rate limit retry.
+
+    Returns:
+        Tuple of (response if successful or None, should_retry_infra)
+    """
+    import asyncio
+
+    while True:
+        start_time = time.time()
+        process_output = await _execute_async_command(cmd, cwd, timeout_seconds)
+        elapsed = time.time() - start_time
+        stdout, stderr, returncode = process_output
+
+        # Check rate limit first
+        should_retry, wait_seconds = await _check_rate_limit_and_retry_async(
+            stdout, stderr, returncode, retry_enabled
+        )
+        if should_retry:
+            await asyncio.sleep(wait_seconds)
+            logger.info("Wait complete, retrying...")
+            continue
+
+        # Check for infrastructure failures
+        if returncode != 0:
+            stderr_text = stderr.decode() if stderr else ""
+            if detect_cli_infrastructure_failure(stderr_text):
+                # Signal to retry in outer loop
+                return None, True
+
+            # Not an infrastructure failure - handle as usual
+            _handle_async_command_failure(process_output, elapsed, prompt_len, cwd)
+
+        # Success - parse and return
+        response = _parse_sync_json_response(stdout.decode())
+        _validate_claude_response(response)
+        return response, False
+
+
 async def run_claude_async(
     prompt: str,
     *,
@@ -593,6 +736,7 @@ async def run_claude_async(
     """Run Claude CLI asynchronously and return JSON response.
 
     Automatically retries on rate limit if retry_on_rate_limit is True (default).
+    Also retries on transient CLI infrastructure failures (e.g., missing modules).
 
     Args:
         prompt: The prompt to send to Claude
@@ -613,26 +757,57 @@ async def run_claude_async(
     cwd = _setup_working_directory_and_prompt(prompt, settings)
     cmd = build_claude_command(settings=settings, output_format="json")
 
-    while True:
-        start_time = time.time()
-        process_output = await _execute_async_command(cmd, cwd, timeout_seconds)
-        elapsed = time.time() - start_time
-        stdout, stderr, returncode = process_output
+    # Outer retry loop for infrastructure failures
+    for attempt in range(MAX_CLI_RETRIES):
+        try:
+            response, should_retry_infra = await _try_async_execution_with_rate_limit_retry(
+                cmd, cwd, timeout_seconds, retry_enabled, len(prompt)
+            )
+            if response:
+                return response
 
-        should_retry, wait_seconds = await _check_rate_limit_and_retry_async(
-            stdout, stderr, returncode, retry_enabled
-        )
-        if should_retry:
-            await asyncio.sleep(wait_seconds)
-            logger.info("Wait complete, retrying...")
-            continue
+            # Infrastructure failure detected
+            if should_retry_infra and attempt < MAX_CLI_RETRIES - 1:
+                backoff_seconds = RETRY_BACKOFF_BASE ** attempt
+                logger.warning(
+                    "Claude CLI infrastructure failure detected (attempt %d/%d). "
+                    "Retrying in %d seconds...",
+                    attempt + 1,
+                    MAX_CLI_RETRIES,
+                    backoff_seconds,
+                )
+                await asyncio.sleep(backoff_seconds)
+                continue
+            elif should_retry_infra:
+                # Final attempt failed
+                logger.error(
+                    "Claude CLI infrastructure failure persisted after %d attempts",
+                    MAX_CLI_RETRIES,
+                )
+                raise RuntimeError("Claude CLI infrastructure failure persisted")
 
-        if returncode != 0:
-            _handle_async_command_failure(process_output, elapsed, len(prompt), cwd)
+        except RuntimeError as e:
+            # If this is the last attempt or not an infrastructure error, re-raise
+            if attempt >= MAX_CLI_RETRIES - 1:
+                raise
+            # Check if the error is due to infrastructure failure
+            error_str = str(e)
+            if detect_cli_infrastructure_failure(error_str):
+                backoff_seconds = RETRY_BACKOFF_BASE ** attempt
+                logger.warning(
+                    "Claude CLI infrastructure failure in execution (attempt %d/%d). "
+                    "Retrying in %d seconds...",
+                    attempt + 1,
+                    MAX_CLI_RETRIES,
+                    backoff_seconds,
+                )
+                await asyncio.sleep(backoff_seconds)
+                continue
+            # Not an infrastructure error - re-raise immediately
+            raise
 
-        response = _parse_sync_json_response(stdout.decode())
-        _validate_claude_response(response)
-        return response
+    # Should never reach here, but just in case
+    raise RuntimeError("Claude CLI failed after maximum retry attempts")
 
 
 def parse_stream_json_line(line: str) -> ClaudeStreamEvent | None:

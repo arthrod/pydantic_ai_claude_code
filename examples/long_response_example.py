@@ -68,7 +68,7 @@ async def example_2_structured_with_large_data():
     """Example 2: Structured output with large amounts of data.
 
     Behind the scenes:
-    - Claude creates /tmp/claude_json_fields_*/
+    - Claude creates /tmp/claude_data_structure_*/
     - For each field:
       * Strings: field_name.txt (built with echo >>)
       * Arrays: field_name/0000.txt, 0001.txt, ... (one file per item)

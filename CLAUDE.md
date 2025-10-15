@@ -265,13 +265,13 @@ uv run python examples/long_response_example.py
 5. Enables responses of unlimited length
 
 *For Structured Outputs:*
-1. Claude creates directory structure mirroring JSON schema: `/tmp/claude_json_fields_<uuid>/`
+1. Claude creates directory structure mirroring JSON schema: `/tmp/claude_data_structure_<uuid>/`
 2. For each field in the schema:
    - **Scalar fields**: Creates `field_name.txt` file, builds content with append (`>>`)
    - **Array fields**: Creates `field_name/` directory with numbered files (`0000.txt`, `0001.txt`, etc.)
 3. Content built gradually - no need to generate everything at once
 4. Creates `.complete` marker file when done
-5. System automatically assembles valid JSON from directory structure via `_assemble_json_from_directory()`:
+5. System automatically assembles valid JSON from directory structure via `read_structure_from_filesystem()`:
    - Reads all field files in lexicographic order
    - Performs type conversion (string, integer, number, boolean)
    - Constructs proper JSON object

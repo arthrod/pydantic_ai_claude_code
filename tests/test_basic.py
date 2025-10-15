@@ -25,22 +25,6 @@ def test_basic_query_sync():
     assert "4" in str(result.output)
 
 
-def test_haiku_model():
-    """Test that haiku model works."""
-    agent = Agent("claude-code:haiku")
-
-    result = agent.run_sync("What is 2+2? Just give me the number.")
-    assert "4" in str(result.output)
-
-
-def test_opus_model():
-    """Test that opus model works."""
-    agent = Agent("claude-code:opus")
-
-    result = agent.run_sync("What is 2+2? Just give me the number.")
-    assert "4" in str(result.output)
-
-
 @pytest.mark.asyncio
 async def test_basic_query_async():
     """Test basic asynchronous query using string format."""

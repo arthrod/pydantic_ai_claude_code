@@ -32,6 +32,10 @@ from .messages import format_messages_for_claude
 from .provider import ClaudeCodeProvider
 from .streamed_response import ClaudeCodeStreamedResponse
 from .streaming import run_claude_streaming
+from .structure_converter import (
+    build_structure_instructions,
+    read_structure_from_filesystem,
+)
 from .types import ClaudeCodeSettings, ClaudeJSONResponse
 from .utils import build_claude_command, run_claude_async
 
@@ -105,34 +109,16 @@ The file must contain ONLY your direct answer - no preambles, no meta-commentary
     def _build_structured_output_instruction(
         self, output_tool: Any, settings: ClaudeCodeSettings
     ) -> str:
-        """Build JSON instruction for structured output.
+        """Build instruction for structured output using improved converter.
 
         Args:
             output_tool: The output tool definition
             settings: Settings dict to store output file path
 
         Returns:
-            JSON instruction string to append to system prompt
+            Instruction string to append to system prompt
         """
         schema = output_tool.parameters_json_schema
-        properties = schema.get("properties", {})
-
-        # Build concrete example
-        example_obj: dict[str, Any] = {}
-        for field, props in properties.items():
-            field_type = props.get("type", "string")
-            if field_type == "integer":
-                example_obj[field] = 42
-            elif field_type == "number":
-                example_obj[field] = 3.14
-            elif field_type == "boolean":
-                example_obj[field] = True
-            elif field_type == "array":
-                example_obj[field] = ["item1", "item2"]
-            elif field_type == "object":
-                example_obj[field] = {"key": "value"}
-            else:
-                example_obj[field] = "example value"
 
         # Generate unique filename for structured output
         output_filename = f"/tmp/claude_structured_output_{uuid.uuid4().hex}.json"
@@ -141,48 +127,11 @@ The file must contain ONLY your direct answer - no preambles, no meta-commentary
         logger.debug("Structured output file path: %s", output_filename)
 
         # Generate unique temp dir for field data
-        temp_data_dir = f"/tmp/claude_json_fields_{uuid.uuid4().hex[:8]}"
+        temp_data_dir = f"/tmp/claude_data_structure_{uuid.uuid4().hex[:8]}"
         settings["__temp_json_dir"] = temp_data_dir
 
-        # Build field type hints for the instruction
-        field_hints = []
-        for field_name, field_props in properties.items():
-            field_type = field_props.get("type", "string")
-            if field_type == "array":
-                field_hints.append(
-                    f"- {field_name}/ (directory for array items: 0000.txt, 0001.txt, 0002.txt, ...)"
-                )
-            else:
-                field_hints.append(f"- {field_name}.txt (for {field_type} value)")
-
-        json_instruction = f"""CRITICAL: STRUCTURED OUTPUT MODE
-
-Target JSON schema:
-{json.dumps(schema, indent=2)}
-
-STRATEGY - Create a file structure that mirrors the JSON:
-1. Create temp directory: mkdir -p {temp_data_dir}
-
-2. For each field, create files matching this structure:
-{chr(10).join(field_hints)}
-
-3. Write content to files:
-   - String fields: echo "content" > {temp_data_dir}/field_name.txt
-   - Number fields: echo "42" > {temp_data_dir}/field_name.txt
-   - Boolean fields: echo "true" > {temp_data_dir}/field_name.txt
-   - Array fields: mkdir -p {temp_data_dir}/field_name
-                   echo "first item" > {temp_data_dir}/field_name/0000.txt
-                   echo "second item" > {temp_data_dir}/field_name/0001.txt
-                   (Use numbered files: 0000.txt, 0001.txt, 0002.txt, etc.)
-
-4. When done, create a marker file: touch {temp_data_dir}/.complete
-
-DO NOT manually create JSON or call jq - just build the file structure.
-The system will automatically assemble valid JSON from your files.
-
-Required fields: {list(properties.keys())}"""
-
-        return json_instruction
+        # Use new structure converter to build instructions
+        return build_structure_instructions(schema, temp_data_dir)
 
     def _check_has_tool_results(self, messages: list[ModelMessage]) -> bool:
         """Check if messages contain tool results.
@@ -200,7 +149,9 @@ Required fields: {list(properties.keys())}"""
             for part in msg.parts
         )
 
-    def _build_function_tools_prompt(self, function_tools: list[Any]) -> tuple[str, dict[str, Any]]:
+    def _build_function_tools_prompt(
+        self, function_tools: list[Any]
+    ) -> tuple[str, dict[str, Any]]:
         """Build function selection prompt and available functions dict.
 
         Args:
@@ -218,23 +169,33 @@ Required fields: {list(properties.keys())}"""
             for param_name, param_schema in params.items():
                 param_type = param_schema.get("type", "unknown")
                 param_hints.append(f"{param_name}: {param_type}")
-            params_str = f" (parameters: {', '.join(param_hints)})" if param_hints else ""
+            params_str = (
+                f" (parameters: {', '.join(param_hints)})" if param_hints else ""
+            )
             option_descriptions.append(f"{i}. {tool.name}{params_str} - {desc}")
-        option_descriptions.append(f"{len(function_tools) + 1}. none - Answer directly without calling any function")
+        option_descriptions.append(
+            f"{len(function_tools) + 1}. none - Answer directly without calling any function"
+        )
 
-        prompt = f"""TASK: Select which function you need to answer the user's request.
+        prompt = f"""TASK: Select which function(s) you need to answer the user's request.
 
-This is NOT asking you to execute these functions - you are only SELECTING which one would be helpful.
+This is NOT asking you to execute these functions - you are only SELECTING which one(s) would be helpful.
 
 Available function options:
 {chr(10).join(option_descriptions)}
 
 Instructions:
 1. Read the user's request carefully
-2. Decide if you need to call a function (options 1-{len(function_tools)}) or can answer directly (option {len(function_tools) + 1})
-3. Respond with EXACTLY this format: CHOICE: function_name (e.g., "CHOICE: {function_tools[0].name if function_tools else 'none'}" or "CHOICE: none")
+2. Decide if you need to call function(s) (options 1-{len(function_tools)}) or can answer directly (option {len(function_tools) + 1})
+3. Respond with EXACTLY this format:
+   - For single function: CHOICE: function_name
+   - For multiple functions: One CHOICE per line:
+     CHOICE: function_name1
+     CHOICE: function_name2
+   - Do NOT include explanations or reasoning
+   - Example: "CHOICE: {function_tools[0].name if function_tools else "none"}" or "CHOICE: none"
 
-DO NOT try to execute these functions yourself - they are not built-in tools available to you. You are only SELECTING which function to use."""
+DO NOT try to execute these functions yourself - they are not built-in tools available to you. You are only SELECTING which function(s) to use."""
 
         available_functions = {tool.name: tool for tool in function_tools}
         return prompt, available_functions
@@ -258,8 +219,12 @@ DO NOT try to execute these functions yourself - they are not built-in tools ava
             List of system prompt parts
         """
         system_prompt_parts = []
-        output_tools = model_request_parameters.output_tools if model_request_parameters else []
-        function_tools = model_request_parameters.function_tools if model_request_parameters else []
+        output_tools = (
+            model_request_parameters.output_tools if model_request_parameters else []
+        )
+        function_tools = (
+            model_request_parameters.function_tools if model_request_parameters else []
+        )
 
         # Only include user's custom system prompt if we don't have tool results yet
         if (
@@ -273,7 +238,9 @@ DO NOT try to execute these functions yourself - they are not built-in tools ava
 
         # Add function tools prompt ONLY if there are no tool results yet
         if function_tools and not has_tool_results:
-            function_selection_prompt, available_functions = self._build_function_tools_prompt(function_tools)
+            function_selection_prompt, available_functions = (
+                self._build_function_tools_prompt(function_tools)
+            )
             settings["__function_selection_mode__"] = True
             settings["__available_functions__"] = available_functions
             system_prompt_parts.append(function_selection_prompt)
@@ -282,10 +249,14 @@ DO NOT try to execute these functions yourself - they are not built-in tools ava
         # Skip file writing instructions for streaming - we need direct text output
         if not is_streaming:
             if output_tools and not function_tools:
-                json_instruction = self._build_structured_output_instruction(output_tools[0], settings)
+                json_instruction = self._build_structured_output_instruction(
+                    output_tools[0], settings
+                )
                 system_prompt_parts.append(json_instruction)
             elif not function_tools:
-                unstructured_instruction = self._build_unstructured_output_instruction(settings)
+                unstructured_instruction = self._build_unstructured_output_instruction(
+                    settings
+                )
                 system_prompt_parts.append(unstructured_instruction)
 
         return system_prompt_parts
@@ -308,21 +279,29 @@ DO NOT try to execute these functions yourself - they are not built-in tools ava
         Returns:
             Final assembled prompt string
         """
-        prompt = format_messages_for_claude(messages, skip_system_prompt=has_tool_results)
+        prompt = format_messages_for_claude(
+            messages, skip_system_prompt=has_tool_results
+        )
         logger.debug("Formatted prompt length: %d chars", len(prompt))
 
         # Prepend system instructions
         if system_prompt_parts:
             combined_system_prompt = "\n\n".join(system_prompt_parts)
             prompt = f"{combined_system_prompt}\n\n{prompt}"
-            logger.debug("Added %d chars of system instructions to prompt", len(combined_system_prompt))
+            logger.debug(
+                "Added %d chars of system instructions to prompt",
+                len(combined_system_prompt),
+            )
 
         # Include user-specified append_system_prompt
         existing_prompt = settings.get("append_system_prompt")
         if existing_prompt:
             prompt = f"{existing_prompt}\n\n{prompt}"
             settings.pop("append_system_prompt", None)
-            logger.debug("Added %d chars of user system prompt to prompt file", len(existing_prompt))
+            logger.debug(
+                "Added %d chars of user system prompt to prompt file",
+                len(existing_prompt),
+            )
 
         return prompt
 
@@ -363,25 +342,36 @@ DO NOT try to execute these functions yourself - they are not built-in tools ava
         Returns:
             Model response with unstructured output
         """
-        logger.info("Function selection was 'none', making follow-up unstructured request")
+        logger.info(
+            "Function selection was 'none', making follow-up unstructured request"
+        )
 
         unstructured_settings = self.provider.get_settings(model=self._model_name)
         system_prompt_parts = []
 
-        if model_request_parameters and hasattr(model_request_parameters, "system_prompt"):
+        if model_request_parameters and hasattr(
+            model_request_parameters, "system_prompt"
+        ):
             sp = getattr(model_request_parameters, "system_prompt", None)
             if sp:
                 system_prompt_parts.append(sp)
 
-        unstructured_instruction = self._build_unstructured_output_instruction(unstructured_settings)
+        unstructured_instruction = self._build_unstructured_output_instruction(
+            unstructured_settings
+        )
         system_prompt_parts.append(unstructured_instruction)
 
         unstructured_prompt = self._assemble_final_prompt(
             messages, system_prompt_parts, unstructured_settings, has_tool_results=False
         )
 
-        logger.debug("Making unstructured request with prompt length: %d", len(unstructured_prompt))
-        unstructured_response = await run_claude_async(unstructured_prompt, settings=unstructured_settings)
+        logger.debug(
+            "Making unstructured request with prompt length: %d",
+            len(unstructured_prompt),
+        )
+        unstructured_response = await run_claude_async(
+            unstructured_prompt, settings=unstructured_settings
+        )
 
         return self._convert_response(
             unstructured_response,
@@ -390,6 +380,140 @@ DO NOT try to execute these functions yourself - they are not built-in tools ava
             settings=unstructured_settings,
         )
 
+    def _build_retry_prompt(
+        self,
+        messages: list[ModelMessage],
+        schema: dict[str, Any],
+        arg_settings: ClaudeCodeSettings,
+        error_msg: str,
+    ) -> str:
+        """Build prompt for retry attempt after validation error.
+
+        Args:
+            messages: Original message list
+            schema: JSON schema for function parameters
+            arg_settings: Settings dict (will be modified with new temp directory)
+            error_msg: Error message from previous attempt
+
+        Returns:
+            Retry prompt string
+        """
+        # Generate new temp directory for retry
+        temp_data_dir = f"/tmp/claude_data_structure_{uuid.uuid4().hex[:8]}"
+        arg_settings["__temp_json_dir"] = temp_data_dir
+
+        # Rebuild instruction with new temp directory
+        instruction = self._build_argument_collection_instruction(
+            schema, arg_settings
+        )
+
+        retry_instruction = f"""
+PREVIOUS ATTEMPT HAD ERRORS:
+{error_msg}
+
+Please fix the issues above and try again. Follow the directory structure instructions carefully."""
+
+        return f"{instruction}\n\n{format_messages_for_claude(messages, skip_system_prompt=True)}\n\n{retry_instruction}"
+
+    async def _try_collect_arguments(
+        self,
+        current_prompt: str,
+        arg_settings: ClaudeCodeSettings,
+        selected_function: str,
+        schema: dict[str, Any],
+    ) -> tuple[ModelResponse | None, str | None, ClaudeJSONResponse]:
+        """Try to collect arguments for selected function.
+
+        Args:
+            current_prompt: Prompt to send to Claude
+            arg_settings: Settings for argument collection
+            selected_function: Name of selected function
+            schema: JSON schema for function parameters
+
+        Returns:
+            Tuple of (model_response, error_msg, claude_response).
+            model_response is not None on success, error_msg is not None on retriable error.
+        """
+        arg_response = await run_claude_async(current_prompt, settings=arg_settings)
+
+        # Read structured output from directory structure
+        structured_file = arg_settings.get("__structured_output_file")
+        if structured_file:
+            parsed_args, error_msg = self._read_structured_output_file(
+                structured_file, schema, arg_settings
+            )
+
+            if parsed_args:
+                logger.info(
+                    "Successfully collected arguments for %s: %s",
+                    selected_function,
+                    parsed_args,
+                )
+                tool_call = ToolCallPart(
+                    tool_name=str(selected_function),
+                    args=parsed_args,
+                    tool_call_id=f"call_{uuid.uuid4().hex[:16]}",
+                )
+                return (
+                    self._create_model_response_with_usage(arg_response, [tool_call]),
+                    None,
+                    arg_response,
+                )
+
+            return None, error_msg, arg_response
+
+        return None, None, arg_response
+
+    def _setup_argument_collection(
+        self,
+        messages: list[ModelMessage],
+        selected_function: str,
+        available_functions: dict[str, Any],
+        arg_response_for_usage: ClaudeJSONResponse,
+    ) -> tuple[ModelResponse | None, ClaudeCodeSettings, dict[str, Any], str]:
+        """Set up argument collection by validating function and building initial prompt.
+
+        Args:
+            messages: Original message list
+            selected_function: Name of selected function
+            available_functions: Dict of available function definitions
+            arg_response_for_usage: Response to extract usage from
+
+        Returns:
+            Tuple of (error_response, arg_settings, schema, arg_prompt).
+            If error_response is not None, return it immediately.
+        """
+        logger.info(
+            "Function '%s' was selected, collecting arguments", selected_function
+        )
+
+        tool_def = available_functions.get(selected_function)
+        if not tool_def:
+            return (
+                self._create_model_response_with_usage(
+                    arg_response_for_usage,
+                    [TextPart(content=f"Error: Function '{selected_function}' not found")],
+                ),
+                {},
+                {},
+                "",
+            )
+
+        arg_settings = self.provider.get_settings(model=self._model_name)
+        schema = tool_def.parameters_json_schema
+
+        # Build initial prompt
+        instruction = self._build_argument_collection_instruction(schema, arg_settings)
+        arg_prompt = format_messages_for_claude(messages, skip_system_prompt=True)
+        arg_prompt = f"{instruction}\n\n{arg_prompt}"
+
+        existing_prompt = arg_settings.get("append_system_prompt")
+        if existing_prompt:
+            arg_prompt = f"{existing_prompt}\n\n{arg_prompt}"
+            arg_settings.pop("append_system_prompt", None)
+
+        return None, arg_settings, schema, arg_prompt
+
     async def _handle_argument_collection(
         self,
         messages: list[ModelMessage],
@@ -397,7 +521,7 @@ DO NOT try to execute these functions yourself - they are not built-in tools ava
         available_functions: dict[str, Any],
         arg_response_for_usage: ClaudeJSONResponse,
     ) -> ModelResponse:
-        """Handle argument collection for selected function.
+        """Handle argument collection for selected function using file/folder structure.
 
         Args:
             messages: Original message list
@@ -408,68 +532,103 @@ DO NOT try to execute these functions yourself - they are not built-in tools ava
         Returns:
             Model response with tool call or error
         """
-        logger.info("Function '%s' was selected, collecting arguments", selected_function)
+        error_response, arg_settings, schema, arg_prompt = (
+            self._setup_argument_collection(
+                messages, selected_function, available_functions, arg_response_for_usage
+            )
+        )
 
-        tool_def = available_functions.get(selected_function)
-        if not tool_def:
-            return self._create_model_response_with_usage(
-                arg_response_for_usage,
-                [TextPart(content=f"Error: Function '{selected_function}' not found")],
+        if error_response:
+            return error_response
+
+        max_retries = 1
+        error_msg = None
+
+        for attempt in range(max_retries + 1):
+            if attempt == 0:
+                logger.debug(
+                    "Making argument collection request with prompt length: %d",
+                    len(arg_prompt),
+                )
+                current_prompt = arg_prompt
+            else:
+                logger.info(
+                    "Retrying argument collection (attempt %d/%d) after validation error",
+                    attempt + 1,
+                    max_retries + 1,
+                )
+                current_prompt = self._build_retry_prompt(
+                    messages, schema, arg_settings, error_msg
+                )
+                logger.debug("Retry prompt length: %d", len(current_prompt))
+
+            model_response, error_msg, arg_response = await self._try_collect_arguments(
+                current_prompt,
+                arg_settings,
+                selected_function,
+                schema,
             )
 
-        arg_settings = self.provider.get_settings(model=self._model_name)
-        schema = tool_def.parameters_json_schema
-        fields_list = list(schema.get("properties", {}).keys())
+            if model_response:
+                return model_response
 
-        arg_prompt_part = f"""Extract the following field values from the user's request:
+            # If error and not last attempt, retry
+            if error_msg and attempt < max_retries:
+                logger.warning(
+                    "Argument extraction failed (attempt %d/%d): %s",
+                    attempt + 1,
+                    max_retries + 1,
+                    error_msg,
+                )
+                continue
 
-Fields: {", ".join(fields_list)}
-
-Respond with ONLY a JSON object matching this schema:
-{json.dumps(schema, indent=2)}
-
-Example format: {{"field1": "value1", "field2": "value2"}}"""
-
-        arg_prompt = format_messages_for_claude(messages, skip_system_prompt=True)
-        arg_prompt = f"{arg_prompt_part}\n\n{arg_prompt}"
-
-        existing_prompt = arg_settings.get("append_system_prompt")
-        if existing_prompt:
-            arg_prompt = f"{existing_prompt}\n\n{arg_prompt}"
-            arg_settings.pop("append_system_prompt", None)
-
-        logger.debug("Making argument collection request with prompt length: %d", len(arg_prompt))
-        arg_response = await run_claude_async(arg_prompt, settings=arg_settings)
-        logger.debug("Argument collection request completed")
-
-        result_text = arg_response.get("result", "")
-
-        try:
-            parsed_args = self._extract_json_robust(result_text, schema)
-            validation_error = self._validate_json_schema(parsed_args, schema)
-
-            if validation_error:
-                logger.error("Argument validation failed: %s", validation_error)
+            # Last attempt failed, return error to user
+            if error_msg:
+                logger.error(
+                    "Argument extraction failed after %d attempts: %s",
+                    attempt + 1,
+                    error_msg,
+                )
                 return self._create_model_response_with_usage(
                     arg_response,
-                    [TextPart(content=validation_error)],
+                    [TextPart(content=error_msg)],
                 )
 
-            logger.info("Successfully collected arguments for %s: %s", selected_function, parsed_args)
-            tool_call = ToolCallPart(
-                tool_name=str(selected_function),
-                args=parsed_args,
-                tool_call_id=f"call_{uuid.uuid4().hex[:16]}",
-            )
-            return self._create_model_response_with_usage(arg_response, [tool_call])
+        # Fallback to error if file reading failed
+        result_text = arg_response.get("result", "")
+        error_msg = (
+            f"Could not interpret the parameters from response: {result_text[:500]}"
+        )
+        return self._create_model_response_with_usage(
+            arg_response,
+            [TextPart(content=error_msg)],
+        )
 
-        except json.JSONDecodeError as e:
-            logger.error("Failed to parse argument JSON: %s", e)
-            error_msg = f"Failed to extract JSON arguments: {e}\nResponse: {result_text[:500]}"
-            return self._create_model_response_with_usage(
-                arg_response,
-                [TextPart(content=error_msg)],
-            )
+    def _build_argument_collection_instruction(
+        self, schema: dict[str, Any], settings: ClaudeCodeSettings
+    ) -> str:
+        """Build instruction for argument collection using file/folder structure.
+
+        This reuses the structured output approach that has proven reliable.
+
+        Args:
+            schema: JSON schema for function parameters
+            settings: Settings dict to store file paths
+
+        Returns:
+            Instruction string with file/folder structure
+        """
+        # Generate unique filename and temp dir (same as structured output)
+        output_filename = f"/tmp/claude_structured_output_{uuid.uuid4().hex}.json"
+        settings["__structured_output_file"] = output_filename
+
+        temp_data_dir = f"/tmp/claude_data_structure_{uuid.uuid4().hex[:8]}"
+        settings["__temp_json_dir"] = temp_data_dir
+
+        logger.debug("Argument collection will use temp directory: %s", temp_data_dir)
+
+        # Use new structure converter to build instructions
+        return build_structure_instructions(schema, temp_data_dir)
 
     async def request(
         self,
@@ -503,8 +662,12 @@ Example format: {{"field1": "value1", "field2": "value2"}}"""
         if model_settings:
             # Merge model_settings into provider settings (model_settings takes precedence)
             settings.update(model_settings)
-        output_tools = model_request_parameters.output_tools if model_request_parameters else []
-        function_tools = model_request_parameters.function_tools if model_request_parameters else []
+        output_tools = (
+            model_request_parameters.output_tools if model_request_parameters else []
+        )
+        function_tools = (
+            model_request_parameters.function_tools if model_request_parameters else []
+        )
 
         # Check if we have tool results in the conversation
         has_tool_results = self._check_has_tool_results(messages)
@@ -517,7 +680,9 @@ Example format: {{"field1": "value1", "field2": "value2"}}"""
         )
 
         # Assemble final prompt with system instructions
-        prompt = self._assemble_final_prompt(messages, system_prompt_parts, settings, has_tool_results)
+        prompt = self._assemble_final_prompt(
+            messages, system_prompt_parts, settings, has_tool_results
+        )
 
         # Run Claude CLI and convert response
         logger.debug("=" * 80)
@@ -526,7 +691,12 @@ Example format: {{"field1": "value1", "field2": "value2"}}"""
         logger.debug("%s", prompt)
         logger.debug("=" * 80)
         response = await run_claude_async(prompt, settings=settings)
-        result = self._convert_response(response, output_tools=output_tools, function_tools=function_tools, settings=settings)
+        result = self._convert_response(
+            response,
+            output_tools=output_tools,
+            function_tools=function_tools,
+            settings=settings,
+        )
 
         # Handle function selection follow-ups if needed
         logger.debug(
@@ -536,11 +706,18 @@ Example format: {{"field1": "value1", "field2": "value2"}}"""
             [type(p).__name__ for p in result.parts],
         )
 
-        if function_tools and settings.get("__function_selection_mode__") and len(result.parts) == 1 and isinstance(result.parts[0], TextPart):
+        if (
+            function_tools
+            and settings.get("__function_selection_mode__")
+            and len(result.parts) == 1
+            and isinstance(result.parts[0], TextPart)
+        ):
             content = result.parts[0].content
 
             if "[Function selection: none" in content:
-                return await self._handle_unstructured_follow_up(messages, model_request_parameters)
+                return await self._handle_unstructured_follow_up(
+                    messages, model_request_parameters
+                )
 
             if "[Function selected:" in content:
                 selected_function = settings.get("__selected_function__")
@@ -588,8 +765,12 @@ Example format: {{"field1": "value1", "field2": "value2"}}"""
         if model_settings:
             # Merge model_settings into provider settings (model_settings takes precedence)
             settings.update(model_settings)
-        output_tools = model_request_parameters.output_tools if model_request_parameters else []
-        function_tools = model_request_parameters.function_tools if model_request_parameters else []
+        output_tools = (
+            model_request_parameters.output_tools if model_request_parameters else []
+        )
+        function_tools = (
+            model_request_parameters.function_tools if model_request_parameters else []
+        )
 
         # Streaming is only supported for plain text responses
         if output_tools:
@@ -616,7 +797,9 @@ Example format: {{"field1": "value1", "field2": "value2"}}"""
         )
 
         # Assemble final prompt with system instructions
-        prompt = self._assemble_final_prompt(messages, system_prompt_parts, settings, has_tool_results)
+        prompt = self._assemble_final_prompt(
+            messages, system_prompt_parts, settings, has_tool_results
+        )
 
         # Add streaming marker instruction
         streaming_marker = "<<<STREAM_START>>>"
@@ -678,38 +861,75 @@ Then provide your complete response after the marker.
         else:
             valid_options = ["none"]
 
-        # Look for "CHOICE:" format - handle markdown bold/italic formatting
+        # Look for "CHOICE:" format - handle markdown bold/italic formatting and multiple choices
         matched_option = None
         import re
 
-        # Strip markdown formatting (**, *, _, etc.) and whitespace around CHOICE
-        choice_match = re.search(r"CHOICE:\s*[\*_]*(\w+)[\*_]*", result_text, re.IGNORECASE)
-        if choice_match:
-            extracted_choice = choice_match.group(1).strip().lower()
-            # Validate it's a valid option
-            if extracted_choice in valid_options:
-                matched_option = extracted_choice
+        # Extract ALL CHOICE lines using findall (handles multiple tool selection)
+        choice_matches = re.findall(
+            r"CHOICE:\s*[\*_]*(\w+)[\*_]*", result_text, re.IGNORECASE
+        )
+
+        if choice_matches:
+            # Validate all extracted choices
+            valid_choices = [
+                c.strip().lower()
+                for c in choice_matches
+                if c.strip().lower() in valid_options
+            ]
+
+            if valid_choices:
+                # Take the FIRST valid choice for THIS iteration
+                matched_option = valid_choices[0]
+
+                # Log if multiple functions were identified
+                if len(valid_choices) > 1:
+                    logger.info(
+                        "Multiple functions identified: %s. Processing '%s' first. "
+                        "Agent will handle remaining tools in subsequent iterations.",
+                        ", ".join(valid_choices),
+                        matched_option,
+                    )
 
         if matched_option:
-            logger.debug("Function selection result: selected_function=%s", matched_option)
+            logger.debug(
+                "Function selection result: selected_function=%s", matched_option
+            )
 
             parts: list[TextPart | ToolCallPart] = []
             if matched_option == "none":
                 # Claude chose to answer directly - signal needs unstructured response
-                logger.info("Function selection returned 'none' - will trigger unstructured response")
-                parts.append(TextPart(content="[Function selection: none - answering directly]"))
+                logger.info(
+                    "Function selection returned 'none' - will trigger unstructured response"
+                )
+                parts.append(
+                    TextPart(content="[Function selection: none - answering directly]")
+                )
             else:
                 # Claude selected a function - signal needs argument collection
-                logger.info("Function selected: %s - will trigger argument collection", matched_option)
-                parts.append(TextPart(content=f"[Function selected: {matched_option} - collecting arguments]"))
+                logger.info(
+                    "Function selected: %s - will trigger argument collection",
+                    matched_option,
+                )
+                parts.append(
+                    TextPart(
+                        content=f"[Function selected: {matched_option} - collecting arguments]"
+                    )
+                )
                 # Store selected function for next request
                 settings["__selected_function__"] = matched_option
 
             return self._create_model_response_with_usage(response, parts)
 
         # Could not parse option selection
-        logger.error("Could not parse function selection from response: %s", result_text[:200])
-        parts = [TextPart(content=f"Error: Could not parse option selection. Response: {result_text}")]
+        logger.error(
+            "Could not parse function selection from response: %s", result_text[:200]
+        )
+        parts = [
+            TextPart(
+                content=f"Error: Could not parse option selection. Response: {result_text}"
+            )
+        ]
         return self._create_model_response_with_usage(response, parts)
 
     def _handle_structured_output_response(
@@ -736,14 +956,20 @@ Then provide your complete response after the marker.
 
         try:
             # Check if Claude created a structured output file
-            structured_file = settings.get("__structured_output_file") if settings else None
+            structured_file = (
+                settings.get("__structured_output_file") if settings else None
+            )
 
             if structured_file:
-                parsed_data, error_msg = self._read_structured_output_file(structured_file, schema, settings)
+                parsed_data, error_msg = self._read_structured_output_file(
+                    structured_file, schema, settings
+                )
 
                 if error_msg:
                     # Return error as text so Pydantic AI can retry
-                    return self._create_model_response_with_usage(response, [TextPart(content=error_msg)])
+                    return self._create_model_response_with_usage(
+                        response, [TextPart(content=error_msg)]
+                    )
 
                 if parsed_data:
                     # Validation passed, create tool call
@@ -756,7 +982,9 @@ Then provide your complete response after the marker.
                     return self._create_model_response_with_usage(response, [tool_call])
 
                 # No file found, use fallback extraction
-                logger.warning("Structured output file not found, using fallback JSON extraction")
+                logger.warning(
+                    "Structured output file not found, using fallback JSON extraction"
+                )
                 parsed_data = self._extract_json_robust(result_text, schema)
                 tool_call = ToolCallPart(
                     tool_name=tool_name,
@@ -766,7 +994,9 @@ Then provide your complete response after the marker.
                 return self._create_model_response_with_usage(response, [tool_call])
 
             # Fallback: Use robust extraction with multiple strategies
-            logger.debug("No structured output file configured, using robust JSON extraction")
+            logger.debug(
+                "No structured output file configured, using robust JSON extraction"
+            )
             parsed_data = self._extract_json_robust(result_text, schema)
             tool_call = ToolCallPart(
                 tool_name=tool_name,
@@ -779,7 +1009,9 @@ Then provide your complete response after the marker.
             # If JSON parsing fails, return as text
             # Pydantic AI will retry with validation error
             logger.error("Failed to parse structured output JSON: %s", e)
-            return self._create_model_response_with_usage(response, [TextPart(content=result_text)])
+            return self._create_model_response_with_usage(
+                response, [TextPart(content=result_text)]
+            )
 
     def _handle_unstructured_output_response(
         self,
@@ -800,29 +1032,46 @@ Then provide your complete response after the marker.
         logger.debug("Processing unstructured output")
 
         # Check if we instructed Claude to write to a file
-        unstructured_file_obj = settings.get("__unstructured_output_file") if settings else None
-        unstructured_file = str(unstructured_file_obj) if unstructured_file_obj else None
+        unstructured_file_obj = (
+            settings.get("__unstructured_output_file") if settings else None
+        )
+        unstructured_file = (
+            str(unstructured_file_obj) if unstructured_file_obj else None
+        )
 
         if unstructured_file and Path(unstructured_file).exists():
             # Read content from file that Claude created
             try:
-                logger.debug("Reading unstructured output from file: %s", unstructured_file)
+                logger.debug(
+                    "Reading unstructured output from file: %s", unstructured_file
+                )
                 with open(unstructured_file) as f:
                     file_content = f.read()
                 # Cleanup temp file
                 self._cleanup_temp_file(unstructured_file)
-                logger.debug("Successfully read %d bytes from unstructured output file", len(file_content))
-                return self._create_model_response_with_usage(response, [TextPart(content=file_content)])
+                logger.debug(
+                    "Successfully read %d bytes from unstructured output file",
+                    len(file_content),
+                )
+                return self._create_model_response_with_usage(
+                    response, [TextPart(content=file_content)]
+                )
             except Exception as e:
                 # Fallback to CLI response if file read fails
-                logger.warning("Failed to read unstructured output file, using CLI response: %s", e)
-                return self._create_model_response_with_usage(response, [TextPart(content=result_text)])
+                logger.warning(
+                    "Failed to read unstructured output file, using CLI response: %s", e
+                )
+                return self._create_model_response_with_usage(
+                    response, [TextPart(content=result_text)]
+                )
 
         # Fallback to CLI response if no file
         if unstructured_file:
             logger.warning("Unstructured output file not found: %s", unstructured_file)
         logger.debug("Using CLI response text for unstructured output")
-        return self._create_model_response_with_usage(response, [TextPart(content=result_text)])
+        return self._create_model_response_with_usage(
+            response, [TextPart(content=result_text)]
+        )
 
     def _convert_response(
         self,
@@ -847,14 +1096,20 @@ Then provide your complete response after the marker.
 
         # Check for function selection mode
         if function_tools and settings and settings.get("__function_selection_mode__"):
-            return self._handle_function_selection_response(result_text, response, settings)
+            return self._handle_function_selection_response(
+                result_text, response, settings
+            )
 
         # Check for structured output
         if output_tools and len(output_tools) > 0:
-            return self._handle_structured_output_response(result_text, response, output_tools, settings)
+            return self._handle_structured_output_response(
+                result_text, response, output_tools, settings
+            )
 
         # Default to unstructured output
-        return self._handle_unstructured_output_response(result_text, response, settings)
+        return self._handle_unstructured_output_response(
+            result_text, response, settings
+        )
 
     def _cleanup_temp_file(self, file_path: str | Path) -> None:
         """Safely remove temporary file.
@@ -882,7 +1137,7 @@ Then provide your complete response after the marker.
         missing_fields = [field for field in required_fields if field not in data]
 
         if missing_fields:
-            return f"Missing required fields: {missing_fields}\nReceived data: {json.dumps(data)}"
+            return f"Please provide: {', '.join(missing_fields)}\nCurrent content: {json.dumps(data)}"
 
         # Validate field types
         properties = schema.get("properties", {})
@@ -910,72 +1165,9 @@ Then provide your complete response after the marker.
                     type_valid = False
 
                 if not type_valid:
-                    return f"Field '{field_name}' has wrong type. Expected {expected_type}, got {type(actual_value).__name__}\nReceived data: {json.dumps(data)}"
+                    return f"The value for '{field_name}' should be a {expected_type}, but it's a {type(actual_value).__name__}\nCurrent content: {json.dumps(data)}"
 
         return None
-
-    def _assemble_json_from_directory(
-        self, dir_path: Path, schema: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Assemble JSON from directory structure created by Claude.
-
-        Args:
-            dir_path: Path to temp directory with field files
-            schema: JSON schema defining expected structure
-
-        Returns:
-            Assembled JSON dictionary
-
-        Raises:
-            RuntimeError: If directory structure doesn't match schema
-        """
-        properties = schema.get("properties", {})
-        result: dict[str, Any] = {}
-
-        for field_name, field_schema in properties.items():
-            field_type = field_schema.get("type", "string")
-            field_path = dir_path / f"{field_name}.txt"
-            field_dir = dir_path / field_name
-
-            if field_type == "array":
-                # Array field: read numbered files from directory
-                if not field_dir.exists() or not field_dir.is_dir():
-                    raise RuntimeError(f"Missing array directory: {field_dir}")
-
-                # Get all numbered .txt files and sort them
-                item_files = sorted(field_dir.glob("*.txt"))
-                items: list[str] = []
-                for item_file in item_files:
-                    content = item_file.read_text().strip()
-                    items.append(content)
-
-                result[field_name] = items
-                logger.debug(
-                    f"Assembled array field '{field_name}' with {len(items)} items"
-                )
-
-            else:
-                # Scalar field: read from .txt file
-                if not field_path.exists():
-                    raise RuntimeError(f"Missing field file: {field_path}")
-
-                content = field_path.read_text().strip()
-
-                # Type conversion
-                converted_value: int | float | bool | str
-                if field_type == "integer":
-                    converted_value = int(content)
-                elif field_type == "number":
-                    converted_value = float(content)
-                elif field_type == "boolean":
-                    converted_value = content.lower() in ("true", "1", "yes")
-                else:  # string
-                    converted_value = content
-
-                result[field_name] = converted_value
-                logger.debug(f"Assembled {field_type} field '{field_name}'")
-
-        return result
 
     def _cleanup_temp_directory(self, temp_path: Path) -> None:
         """Clean up temporary directory.
@@ -1006,34 +1198,32 @@ Then provide your complete response after the marker.
             return None, None
 
         temp_path = Path(temp_json_dir)
-        complete_marker = temp_path / ".complete"
 
-        if not complete_marker.exists():
+        # Check if directory exists (no need for completion marker since CLI execution is synchronous)
+        if not temp_path.exists():
             return None, None
 
         logger.debug("Found temp directory structure at: %s", temp_path)
 
         try:
-            # Assemble JSON from directory structure
-            parsed_data = self._assemble_json_from_directory(temp_path, schema)
-            logger.debug("Successfully assembled JSON from directory structure")
+            # Use new structure converter to read and validate
+            parsed_data = read_structure_from_filesystem(schema, temp_path)
+            logger.debug("Successfully read JSON from directory structure")
 
-            # Validate schema
-            validation_error = self._validate_json_schema(parsed_data, schema)
-            if validation_error:
-                logger.error("Schema validation failed: %s", validation_error)
-                self._cleanup_temp_directory(temp_path)
-                return None, validation_error
-
-            # Validation passed - clean up temp directory
+            # Clean up temp directory
             self._cleanup_temp_directory(temp_path)
             logger.debug("Cleaned up temp directory")
             return parsed_data, None
 
-        except Exception as e:
-            logger.error("Failed to assemble JSON from directory: %s", e)
+        except RuntimeError as e:
+            # RuntimeError contains user-friendly error messages from converter
+            logger.error("Failed to read directory structure: %s", e)
             self._cleanup_temp_directory(temp_path)
-            return None, f"Failed to assemble JSON from directory structure: {e}"
+            return None, str(e)
+        except Exception as e:
+            logger.error("Unexpected error reading directory: %s", e)
+            self._cleanup_temp_directory(temp_path)
+            return None, f"Could not read the data structure: {e}"
 
     def _try_read_json_file(
         self,
@@ -1072,7 +1262,10 @@ Then provide your complete response after the marker.
         except json.JSONDecodeError as e:
             logger.error("Invalid JSON in structured output file: %s", e)
             self._cleanup_temp_file(file_path)
-            return None, f"Invalid JSON in file: {e}\nFile content:\n{file_content}"
+            return (
+                None,
+                f"The file content isn't formatted correctly: {e}\nFile content:\n{file_content}",
+            )
 
         # Validate schema
         validation_error = self._validate_json_schema(parsed_data, schema)

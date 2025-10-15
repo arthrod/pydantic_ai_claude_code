@@ -84,6 +84,50 @@ async def run_claude_streaming(
         raise RuntimeError(f"Claude CLI error: {stderr.decode()}")
 
 
+def _extract_from_content_block_delta(event: ClaudeStreamEvent) -> str | None:
+    """Extract text from content_block_delta event."""
+    delta = event.get("delta", {})
+    if isinstance(delta, dict) and delta.get("type") == "text_delta":
+        text = delta.get("text", "")
+        if text:
+            logger.debug("Extracted text delta: %d chars", len(text))
+            return text
+    return None
+
+
+def _extract_from_assistant(event: ClaudeStreamEvent) -> str | None:
+    """Extract text from assistant message snapshot."""
+    message = event.get("message", {})
+    if not isinstance(message, dict):
+        return None
+
+    content = message.get("content", [])
+    if not isinstance(content, list):
+        return None
+
+    # Concatenate all text parts
+    text_parts = []
+    for part in content:
+        if isinstance(part, dict) and part.get("type") == "text":
+            text_value = part.get("text", "")
+            if isinstance(text_value, str):
+                text_parts.append(text_value)
+
+    text = "".join(text_parts) if text_parts else None
+    if text:
+        logger.debug("Extracted %d chars of text from assistant event", len(text))
+    return text
+
+
+def _extract_from_result(event: ClaudeStreamEvent) -> str | None:
+    """Extract text from result event."""
+    result = event.get("result")
+    if result and isinstance(result, str):
+        logger.debug("Extracted result: %d chars", len(result))
+        return result
+    return None
+
+
 def extract_text_from_stream_event(event: ClaudeStreamEvent) -> str | None:
     """Extract text content from a stream event.
 
@@ -96,44 +140,10 @@ def extract_text_from_stream_event(event: ClaudeStreamEvent) -> str | None:
     event_type = event.get("type")
 
     if event_type == "content_block_delta":
-        # Extract text delta from streaming event (verbose mode)
-        delta = event.get("delta", {})
-        if isinstance(delta, dict) and delta.get("type") == "text_delta":
-            text = delta.get("text", "")
-            if text:
-                logger.debug("Extracted text delta: %d chars", len(text))
-                return text
-        return None
-
+        return _extract_from_content_block_delta(event)
     elif event_type == "assistant":
-        # Extract text from assistant message snapshot
-        message = event.get("message", {})
-        if not isinstance(message, dict):
-            return None
-
-        content = message.get("content", [])
-        if not isinstance(content, list):
-            return None
-
-        # Concatenate all text parts
-        text_parts = []
-        for part in content:
-            if isinstance(part, dict) and part.get("type") == "text":
-                text_value = part.get("text", "")
-                if isinstance(text_value, str):
-                    text_parts.append(text_value)
-
-        text = "".join(text_parts) if text_parts else None
-        if text:
-            logger.debug("Extracted %d chars of text from assistant event", len(text))
-        return text
-
+        return _extract_from_assistant(event)
     elif event_type == "result":
-        # Extract final result
-        result = event.get("result")
-        if result and isinstance(result, str):
-            logger.debug("Extracted result: %d chars", len(result))
-            return result
-        return None
+        return _extract_from_result(event)
 
     return None
