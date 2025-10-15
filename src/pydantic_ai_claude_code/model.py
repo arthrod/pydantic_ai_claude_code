@@ -242,24 +242,24 @@ DO NOT try to execute these functions yourself - they are not built-in tools ava
     def _build_system_prompt_parts(
         self,
         model_request_parameters: ModelRequestParameters,
-        output_tools: list[Any],
-        function_tools: list[Any],
         has_tool_results: bool,
         settings: ClaudeCodeSettings,
+        is_streaming: bool = False,
     ) -> list[str]:
         """Build system prompt parts for request.
 
         Args:
-            model_request_parameters: Request parameters
-            output_tools: Output tool definitions
-            function_tools: Function tool definitions
+            model_request_parameters: Request parameters (includes output_tools and function_tools)
             has_tool_results: Whether messages contain tool results
             settings: Settings dict (will be modified)
+            is_streaming: Whether this is a streaming request (skips file output instructions)
 
         Returns:
             List of system prompt parts
         """
         system_prompt_parts = []
+        output_tools = model_request_parameters.output_tools if model_request_parameters else []
+        function_tools = model_request_parameters.function_tools if model_request_parameters else []
 
         # Only include user's custom system prompt if we don't have tool results yet
         if (
@@ -279,12 +279,14 @@ DO NOT try to execute these functions yourself - they are not built-in tools ava
             system_prompt_parts.append(function_selection_prompt)
 
         # Add output instructions (only if not in function call mode)
-        if output_tools and not function_tools:
-            json_instruction = self._build_structured_output_instruction(output_tools[0], settings)
-            system_prompt_parts.append(json_instruction)
-        elif not function_tools:
-            unstructured_instruction = self._build_unstructured_output_instruction(settings)
-            system_prompt_parts.append(unstructured_instruction)
+        # Skip file writing instructions for streaming - we need direct text output
+        if not is_streaming:
+            if output_tools and not function_tools:
+                json_instruction = self._build_structured_output_instruction(output_tools[0], settings)
+                system_prompt_parts.append(json_instruction)
+            elif not function_tools:
+                unstructured_instruction = self._build_unstructured_output_instruction(settings)
+                system_prompt_parts.append(unstructured_instruction)
 
         return system_prompt_parts
 
@@ -510,8 +512,6 @@ Example format: {{"field1": "value1", "field2": "value2"}}"""
         # Build system prompt with appropriate instructions
         system_prompt_parts = self._build_system_prompt_parts(
             model_request_parameters,
-            output_tools,
-            function_tools,
             has_tool_results,
             settings,
         )
@@ -591,20 +591,41 @@ Example format: {{"field1": "value1", "field2": "value2"}}"""
         output_tools = model_request_parameters.output_tools if model_request_parameters else []
         function_tools = model_request_parameters.function_tools if model_request_parameters else []
 
+        # Streaming is only supported for plain text responses
+        if output_tools:
+            raise ValueError(
+                "Streaming is not supported with structured output (output_tools). "
+                "Structured output requires file-based JSON construction which is incompatible with streaming."
+            )
+        if function_tools:
+            raise ValueError(
+                "Streaming is not supported with function tools. "
+                "Function calling requires file-based argument collection which is incompatible with streaming."
+            )
+
         # Check if we have tool results in the conversation
         has_tool_results = self._check_has_tool_results(messages)
 
         # Build system prompt with appropriate instructions
+        # Pass is_streaming=True to skip file writing instructions
         system_prompt_parts = self._build_system_prompt_parts(
             model_request_parameters,
-            output_tools,
-            function_tools,
             has_tool_results,
             settings,
+            is_streaming=True,
         )
 
         # Assemble final prompt with system instructions
         prompt = self._assemble_final_prompt(messages, system_prompt_parts, settings, has_tool_results)
+
+        # Add streaming marker instruction
+        streaming_marker = "<<<STREAM_START>>>"
+        prompt = f"""IMPORTANT: After completing any tool use, begin your final response with the exact marker: {streaming_marker}
+
+Then provide your complete response after the marker.
+
+{prompt}"""
+        settings["__streaming_marker__"] = streaming_marker
 
         # Setup working directory for streaming
         import tempfile
@@ -627,6 +648,7 @@ Example format: {{"field1": "value1", "field2": "value2"}}"""
             model_name=f"claude-code:{self._model_name}",
             event_stream=event_stream,
             timestamp=datetime.now(timezone.utc),
+            streaming_marker=streaming_marker,
         )
 
         yield streamed_response

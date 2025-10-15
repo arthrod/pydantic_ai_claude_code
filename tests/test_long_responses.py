@@ -324,7 +324,7 @@ class TestJSONAssembly:
         assert "DO NOT manually create JSON" in instruction
 
     def test_unstructured_output_instruction_format(self):
-        """Test that unstructured output instruction includes gradual appending."""
+        """Test that unstructured output instruction uses Write tool."""
         model = ClaudeCodeModel()
 
         from pydantic_ai_claude_code.types import ClaudeCodeSettings
@@ -335,11 +335,9 @@ class TestJSONAssembly:
 
         # Check that instruction includes key elements
         assert "Write tool" in instruction
-        assert "bash" in instruction
-        assert "echo" in instruction
-        assert ">>" in instruction  # Append operator
-        assert "cat <<" in instruction  # Heredoc
-        assert "incrementally" in instruction
+        assert "/tmp/claude_unstructured_output_" in instruction
+        assert "complete response" in instruction
+        assert "ONLY your direct answer" in instruction
 
 
 class TestValidationErrors:

@@ -134,6 +134,8 @@ uv run python examples/long_response_example.py
    - Manages configuration for Claude CLI execution
    - Handles working directory setup (including temporary workspaces)
    - Configures tool permissions, rate limit retry, and other CLI flags
+   - Supports custom Claude CLI binary paths via settings or environment variable
+   - Enables pass-through of arbitrary CLI arguments for forward compatibility
    - Provides context manager for automatic temp directory cleanup
 
 2. **ClaudeCodeModel** (`model.py`)
@@ -162,6 +164,7 @@ uv run python examples/long_response_example.py
    - Implements Pydantic AI's `StreamedResponse` interface for text and structured output streaming
 
 6. **CLI Utilities** (`utils.py`)
+   - Resolves Claude CLI binary path with priority: settings > env var > PATH
    - Builds Claude CLI commands with appropriate flags
    - Manages prompt file creation in working directories
    - Runs commands sync/async via subprocess
@@ -172,6 +175,28 @@ uv run python examples/long_response_example.py
    - Enables string-based model usage: `Agent('claude-code:sonnet')`
 
 ### Key Design Patterns
+
+**Claude CLI Path Resolution**: The package supports flexible configuration of the Claude CLI binary location:
+- **Priority 1 - Settings**: `claude_cli_path` in `ClaudeCodeSettings` (highest priority)
+- **Priority 2 - Environment**: `CLAUDE_CLI_PATH` environment variable
+- **Priority 3 - PATH**: Auto-resolved using `shutil.which('claude')` (default)
+- This allows users to:
+  - Use custom Claude builds or non-standard installations
+  - Override system-wide defaults on a per-agent basis
+  - Configure via environment variables for containerized deployments
+- If Claude CLI cannot be found, a helpful error message is raised with setup instructions
+
+**Extra CLI Arguments Pass-Through**: The package supports arbitrary CLI arguments for forward compatibility:
+- Use `extra_cli_args` in `ClaudeCodeSettings` to pass any CLI flags not explicitly supported
+- Arguments are appended to the command before the prompt instruction
+- Enables use of:
+  - New CLI features before explicit support is added
+  - Experimental or version-specific flags
+  - Debug and diagnostic flags (`--debug`, `--mcp-debug`)
+  - MCP configuration (`--mcp-config`, `--strict-mcp-config`)
+  - Custom agents (`--agents`), additional directories (`--add-dir`), etc.
+- Example: `{"extra_cli_args": ["--debug", "api", "--add-dir", "/path"]}`
+- Works with any version of Claude CLI - future-proof design
 
 **Prompt File Strategy**: All prompts are passed to Claude CLI via files rather than command-line arguments:
 1. Each execution creates or uses a working directory (temp directory if none specified)
@@ -268,6 +293,8 @@ uv run python examples/long_response_example.py
 - **Permission handling**: Defaults to `dangerously_skip_permissions=True` for non-interactive use
 - **Rate limit retry**: Defaults to `retry_on_rate_limit=True` to automatically wait and retry when hitting usage limits
 - **Model names**: Supports short names (sonnet, opus, haiku) and full model IDs (claude-sonnet-4-5-20250929)
+- **CLI path resolution**: Automatically finds `claude` binary from PATH, or can be customized via `claude_cli_path` setting or `CLAUDE_CLI_PATH` environment variable
+- **Extra CLI arguments**: Pass arbitrary CLI flags via `extra_cli_args` for forward compatibility with any version of Claude CLI
 - **CLI execution**: All requests shell out to the `claude` CLI binary (must be installed and authenticated)
 - **JSON extraction**: Uses multiple fallback strategies (file read, markdown block parsing, regex extraction, single-field wrapping) to robustly extract JSON from Claude's responses
 - **Unstructured output**: Captured directly from stdout without temp files for simplicity and reliability
@@ -319,20 +346,94 @@ Log levels used:
 ## Common Debugging Tips
 
 1. **Check CLI availability**: Run `claude --version` to ensure CLI is installed
-2. **Test CLI directly**: Run `claude --print --output-format json "What is 2+2?"` to verify CLI works
-3. **Enable debug logging**: Use `logging.getLogger('pydantic_ai_claude_code').setLevel(logging.DEBUG)` to see detailed execution
-4. **Check prompt files**: Prompts are written to `/tmp/claude_prompt_*/prompt.md` - examine these to verify prompt formatting
-5. **Check output files** (for structured output only):
+2. **Configure CLI path** (if needed):
+   - Set via settings: `ClaudeCodeSettings({"claude_cli_path": "/path/to/claude"})`
+   - Set via environment: `export CLAUDE_CLI_PATH=/path/to/claude`
+   - Auto-resolved from PATH by default using `shutil.which('claude')`
+3. **Test CLI directly**: Run `claude --print --output-format json "What is 2+2?"` to verify CLI works
+4. **Enable debug logging**: Use `logging.getLogger('pydantic_ai_claude_code').setLevel(logging.DEBUG)` to see detailed execution
+5. **Check prompt files**: Prompts are written to `/tmp/claude_prompt_*/prompt.md` - examine these to verify prompt formatting
+6. **Check output files** (for structured output only):
    - Structured output: `/tmp/claude_structured_output_*.json`
    - Function call output: `/tmp/claude_function_call_*.json`
    - Note: Files are cleaned up after successful reads
    - Unstructured output: No file created, captured from CLI stdout directly
-6. **Validate JSON manually**: If structured output fails, check the temp file exists and contains valid JSON
-7. **Fallback behavior**: If output files aren't created or can't be read, the system falls back to using CLI's direct response text
-8. **Rate limit handling**: If you see "Rate limit hit. Waiting N minutes..." messages in logs, the package is automatically handling rate limits - just wait for it to complete
-9. **Timeout errors**: If you get timeout errors:
+7. **Validate JSON manually**: If structured output fails, check the temp file exists and contains valid JSON
+8. **Fallback behavior**: If output files aren't created or can't be read, the system falls back to using CLI's direct response text
+9. **Rate limit handling**: If you see "Rate limit hit. Waiting N minutes..." messages in logs, the package is automatically handling rate limits - just wait for it to complete
+10. **Timeout errors**: If you get timeout errors:
    - Check error message for elapsed time and prompt length
    - Default timeout is 15 minutes (900 seconds)
    - Increase timeout via `ClaudeCodeSettings`: `{"timeout_seconds": 1800}` for 30 minutes
    - Consider breaking large tasks into smaller chunks
    - Check logs for detailed timing information at ERROR level
+
+## Usage Examples for Advanced Configuration
+
+### Custom CLI Path
+
+```python
+from pydantic_ai import Agent
+from pydantic_ai_claude_code import ClaudeCodeProvider
+
+# Use custom Claude CLI binary
+provider = ClaudeCodeProvider({
+    "claude_cli_path": "/opt/claude/bin/claude"
+})
+
+agent = Agent("claude-code:sonnet", provider=provider)
+```
+
+### Extra CLI Arguments
+
+```python
+# Enable debug mode for API calls
+provider = ClaudeCodeProvider({
+    "extra_cli_args": ["--debug", "api"]
+})
+
+# Use MCP configuration files
+provider = ClaudeCodeProvider({
+    "extra_cli_args": [
+        "--mcp-config", "/path/to/mcp-config.json",
+        "--strict-mcp-config"
+    ]
+})
+
+# Grant access to additional directories
+provider = ClaudeCodeProvider({
+    "extra_cli_args": [
+        "--add-dir", "/data/project1",
+        "--add-dir", "/data/project2"
+    ]
+})
+
+# Define custom agents
+provider = ClaudeCodeProvider({
+    "extra_cli_args": [
+        "--agents", '{"code_reviewer": {"description": "Reviews code changes", "prompt": "You are an expert code reviewer"}}'
+    ]
+})
+
+# Combine multiple flags
+provider = ClaudeCodeProvider({
+    "model": "sonnet",
+    "timeout_seconds": 1800,
+    "extra_cli_args": [
+        "--debug", "api,mcp",
+        "--verbose",
+        "--mcp-config", "configs/mcp.json",
+        "--add-dir", "/workspace"
+    ]
+})
+```
+
+### Environment-Based Configuration
+
+```bash
+# Set CLI path via environment
+export CLAUDE_CLI_PATH=/opt/custom/claude
+
+# Then use normally in Python
+python your_script.py
+```

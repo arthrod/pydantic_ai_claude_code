@@ -2,7 +2,9 @@
 
 import json
 import logging
+import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -16,6 +18,52 @@ logger = logging.getLogger(__name__)
 
 # Constants
 LONG_RUNTIME_THRESHOLD_SECONDS = 600  # 10 minutes threshold for long runtime warnings
+
+
+def resolve_claude_cli_path(settings: ClaudeCodeSettings | None = None) -> str:
+    """Resolve path to Claude CLI binary.
+
+    Resolution priority:
+    1. claude_cli_path from settings (if provided)
+    2. CLAUDE_CLI_PATH environment variable
+    3. shutil.which('claude') - auto-resolve from PATH
+
+    Args:
+        settings: Optional settings containing claude_cli_path
+
+    Returns:
+        Path to claude CLI binary
+
+    Raises:
+        RuntimeError: If claude CLI cannot be found
+    """
+    # Priority 1: Settings
+    if settings and settings.get("claude_cli_path"):
+        cli_path = settings["claude_cli_path"]
+        logger.debug("Using claude CLI from settings: %s", cli_path)
+        return cli_path
+
+    # Priority 2: Environment variable
+    env_path = os.environ.get("CLAUDE_CLI_PATH")
+    if env_path:
+        logger.debug("Using claude CLI from CLAUDE_CLI_PATH env var: %s", env_path)
+        return env_path
+
+    # Priority 3: Auto-resolve from PATH
+    which_path = shutil.which("claude")
+    if which_path:
+        logger.debug("Auto-resolved claude CLI from PATH: %s", which_path)
+        return which_path
+
+    # Not found
+    logger.error("Could not find claude CLI binary")
+    raise RuntimeError(
+        "Could not find claude CLI binary. Please either:\n"
+        "1. Install Claude Code (see claude.com/claude-code)\n"
+        "2. Set claude_cli_path in ClaudeCodeSettings\n"
+        "3. Set CLAUDE_CLI_PATH environment variable\n"
+        "4. Add claude binary to your PATH"
+    )
 
 
 def detect_rate_limit(error_output: str) -> tuple[bool, str | None]:
@@ -159,7 +207,8 @@ def build_claude_command(
         List of command arguments
     """
     settings = settings or {}
-    cmd = ["claude", "--print"]
+    claude_path = resolve_claude_cli_path(settings)
+    cmd = [claude_path, "--print"]
 
     # Add format flags
     cmd.extend(["--output-format", output_format])
@@ -167,9 +216,16 @@ def build_claude_command(
         cmd.extend(["--input-format", input_format])
     if output_format == "stream-json":
         cmd.append("--include-partial-messages")
+        cmd.append("--verbose")  # Required for stream-json output
 
     # Add settings-based flags
     _add_settings_flags(cmd, settings)
+
+    # Add extra CLI arguments (pass-through for any CLI flags)
+    extra_args = settings.get("extra_cli_args")
+    if extra_args:
+        cmd.extend(extra_args)
+        logger.debug("Added %d extra CLI arguments: %s", len(extra_args), extra_args)
 
     # Add prompt reference
     cmd.append("Follow the instructions in prompt.md")

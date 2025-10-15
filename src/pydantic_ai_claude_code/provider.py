@@ -37,6 +37,8 @@ class ClaudeCodeProvider:
                 - use_temp_workspace: Create temporary workspace (default: True)
                 - retry_on_rate_limit: Auto-retry on rate limits (default: True)
                 - timeout_seconds: Subprocess timeout in seconds (default: 900)
+                - claude_cli_path: Path to claude CLI binary (auto-resolved if not provided)
+                - extra_cli_args: Additional CLI arguments to pass through (e.g., ["--debug", "--mcp-config", "config.json"])
         """
         config = settings or {}
 
@@ -52,18 +54,22 @@ class ClaudeCodeProvider:
         self.use_temp_workspace = config.get("use_temp_workspace", True)
         self.retry_on_rate_limit = config.get("retry_on_rate_limit", True)
         self.timeout_seconds = config.get("timeout_seconds", 900)
+        self.claude_cli_path = config.get("claude_cli_path")
+        self.extra_cli_args = config.get("extra_cli_args")
         self._temp_dir: Path | None = None
 
         logger.debug(
             "Initialized ClaudeCodeProvider with model=%s, "
             "working_directory=%s, use_temp_workspace=%s, "
-            "dangerously_skip_permissions=%s, retry_on_rate_limit=%s, timeout_seconds=%s",
+            "dangerously_skip_permissions=%s, retry_on_rate_limit=%s, timeout_seconds=%s, "
+            "claude_cli_path=%s",
             self.model,
             self.working_directory,
             self.use_temp_workspace,
             self.dangerously_skip_permissions,
             self.retry_on_rate_limit,
             self.timeout_seconds,
+            self.claude_cli_path,
         )
 
     def __enter__(self) -> Self:
@@ -124,6 +130,8 @@ class ClaudeCodeProvider:
             "dangerously_skip_permissions": self.dangerously_skip_permissions,
             "retry_on_rate_limit": self.retry_on_rate_limit,
             "timeout_seconds": self.timeout_seconds,
+            "claude_cli_path": self.claude_cli_path,
+            "extra_cli_args": self.extra_cli_args,
         }
 
         # Apply overrides

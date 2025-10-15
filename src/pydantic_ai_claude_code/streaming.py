@@ -22,7 +22,7 @@ async def run_claude_streaming(
         cwd: Working directory
 
     Yields:
-        Parsed stream events
+        Parsed stream events (unwrapped from verbose format if needed)
     """
     logger.info("Starting Claude CLI streaming in %s", cwd or "current directory")
     logger.debug("Streaming command: %s", " ".join(cmd))
@@ -50,9 +50,20 @@ async def run_claude_streaming(
         try:
             event = json.loads(line.decode().strip())
             event_count += 1
-            if event.get("type"):
-                logger.debug("Streaming event #%d: type=%s", event_count, event["type"])
-            yield event
+
+            # Unwrap stream_event wrapper (from verbose mode)
+            if event.get("type") == "stream_event" and "event" in event:
+                nested_event = event["event"]
+                logger.debug(
+                    "Streaming event #%d: type=stream_event, nested_type=%s",
+                    event_count,
+                    nested_event.get("type"),
+                )
+                yield nested_event
+            else:
+                if event.get("type"):
+                    logger.debug("Streaming event #%d: type=%s", event_count, event["type"])
+                yield event
         except json.JSONDecodeError as e:
             # Skip invalid JSON lines
             logger.warning("Skipping invalid JSON line in stream: %s", e)
@@ -77,15 +88,25 @@ def extract_text_from_stream_event(event: ClaudeStreamEvent) -> str | None:
     """Extract text content from a stream event.
 
     Args:
-        event: Stream event from Claude CLI
+        event: Stream event from Claude CLI (unwrapped from verbose format)
 
     Returns:
         Extracted text or None if no text in event
     """
     event_type = event.get("type")
 
-    if event_type == "assistant":
-        # Extract text from assistant message
+    if event_type == "content_block_delta":
+        # Extract text delta from streaming event (verbose mode)
+        delta = event.get("delta", {})
+        if isinstance(delta, dict) and delta.get("type") == "text_delta":
+            text = delta.get("text", "")
+            if text:
+                logger.debug("Extracted text delta: %d chars", len(text))
+                return text
+        return None
+
+    elif event_type == "assistant":
+        # Extract text from assistant message snapshot
         message = event.get("message", {})
         if not isinstance(message, dict):
             return None

@@ -114,6 +114,8 @@ class ClaudeCodeSettings(TypedDict, total=False):
     dangerously_skip_permissions: bool
     retry_on_rate_limit: bool
     timeout_seconds: int  # Timeout for Claude CLI execution (default: 900 = 15 minutes)
+    claude_cli_path: str | None  # Path to claude CLI binary (defaults to auto-resolved)
+    extra_cli_args: list[str] | None  # Additional CLI arguments to pass through to claude CLI
     __structured_output_file: str  # Internal: temp file path for structured output
     __unstructured_output_file: str  # Internal: temp file path for unstructured output
     __function_call_file: str  # Internal: temp file path for function call JSON
