@@ -116,6 +116,7 @@ class ClaudeCodeSettings(TypedDict, total=False):
     timeout_seconds: int  # Timeout for Claude CLI execution (default: 900 = 15 minutes)
     claude_cli_path: str | None  # Path to claude CLI binary (defaults to auto-resolved)
     extra_cli_args: list[str] | None  # Additional CLI arguments to pass through to claude CLI
+    debug_save_prompts: str | bool  # Save prompts and responses to directory (True = /tmp/claude_debug, or specify path)
     __structured_output_file: str  # Internal: temp file path for structured output
     __unstructured_output_file: str  # Internal: temp file path for unstructured output
     __function_call_file: str  # Internal: temp file path for function call JSON

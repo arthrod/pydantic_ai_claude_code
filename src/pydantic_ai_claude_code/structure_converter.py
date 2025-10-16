@@ -10,10 +10,36 @@ from pathlib import Path
 from typing import Any
 
 
+def _resolve_schema_ref(field_schema: dict[str, Any], root_schema: dict[str, Any]) -> dict[str, Any]:
+    """Resolve $ref references in JSON schema.
+
+    Args:
+        field_schema: Field schema that may contain $ref
+        root_schema: Root schema containing $defs
+
+    Returns:
+        Resolved schema with $ref expanded
+    """
+    if "$ref" not in field_schema:
+        return field_schema
+
+    ref = field_schema["$ref"]
+    # Handle references like "#/$defs/UserProfile"
+    if ref.startswith("#/$defs/"):
+        def_name = ref.split("/")[-1]
+        defs = root_schema.get("$defs", {})
+        if def_name in defs:
+            return defs[def_name]
+
+    # If we can't resolve, return original
+    return field_schema
+
+
 def write_structure_to_filesystem(
     data: dict[str, Any],
     schema: dict[str, Any],
     base_path: Path,
+    root_schema: dict[str, Any] | None = None,
 ) -> None:
     """Write structured data to filesystem representation.
 
@@ -21,10 +47,14 @@ def write_structure_to_filesystem(
         data: Data dictionary to write
         schema: JSON schema defining structure and types
         base_path: Base directory path to write to
+        root_schema: Root schema for resolving $ref (defaults to schema)
 
     Raises:
         ValueError: If data doesn't match schema
     """
+    if root_schema is None:
+        root_schema = schema
+
     base_path.mkdir(parents=True, exist_ok=True)
     properties = schema.get("properties", {})
 
@@ -32,13 +62,15 @@ def write_structure_to_filesystem(
         if field_name not in data:
             continue
 
+        # Resolve $ref if present
+        field_schema = _resolve_schema_ref(field_schema, root_schema)
         field_value = data[field_name]
         field_type = field_schema.get("type", "string")
 
         if field_type == "array":
-            _write_array_field(field_name, field_value, field_schema, base_path)
+            _write_array_field(field_name, field_value, field_schema, base_path, root_schema)
         elif field_type == "object":
-            _write_object_field(field_name, field_value, field_schema, base_path)
+            _write_object_field(field_name, field_value, field_schema, base_path, root_schema)
         else:
             _write_scalar_field(field_name, field_value, field_type, base_path)
 
@@ -67,6 +99,7 @@ def _write_array_field(
     value: list[Any],
     field_schema: dict[str, Any],
     base_path: Path,
+    root_schema: dict[str, Any],
 ) -> None:
     """Write array field to directory with numbered files/subdirs."""
     array_dir = base_path / field_name
@@ -81,7 +114,7 @@ def _write_array_field(
         if item_type == "object":
             # Array of objects: create numbered subdirectories
             item_dir = array_dir / item_name
-            write_structure_to_filesystem(item, items_schema, item_dir)
+            write_structure_to_filesystem(item, items_schema, item_dir, root_schema)
         else:
             # Array of primitives: create numbered .txt files
             item_file = array_dir / f"{item_name}.txt"
@@ -99,21 +132,24 @@ def _write_object_field(
     value: dict[str, Any],
     field_schema: dict[str, Any],
     base_path: Path,
+    root_schema: dict[str, Any],
 ) -> None:
     """Write object field to subdirectory."""
     object_dir = base_path / field_name
-    write_structure_to_filesystem(value, field_schema, object_dir)
+    write_structure_to_filesystem(value, field_schema, object_dir, root_schema)
 
 
 def read_structure_from_filesystem(
     schema: dict[str, Any],
     base_path: Path,
+    root_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Read structured data from filesystem representation.
 
     Args:
         schema: JSON schema defining structure and types
         base_path: Base directory path to read from
+        root_schema: Root schema for resolving $ref (defaults to schema)
 
     Returns:
         Assembled data dictionary
@@ -121,6 +157,9 @@ def read_structure_from_filesystem(
     Raises:
         RuntimeError: If filesystem structure doesn't match schema
     """
+    if root_schema is None:
+        root_schema = schema
+
     if not base_path.exists():
         raise RuntimeError(
             f"Working directory not found.\n"
@@ -132,12 +171,14 @@ def read_structure_from_filesystem(
     result: dict[str, Any] = {}
 
     for field_name, field_schema in properties.items():
+        # Resolve $ref if present
+        field_schema = _resolve_schema_ref(field_schema, root_schema)
         field_type = field_schema.get("type", "string")
 
         if field_type == "array":
-            result[field_name] = _read_array_field(field_name, field_schema, base_path)
+            result[field_name] = _read_array_field(field_name, field_schema, base_path, root_schema)
         elif field_type == "object":
-            result[field_name] = _read_object_field(field_name, field_schema, base_path)
+            result[field_name] = _read_object_field(field_name, field_schema, base_path, root_schema)
         else:
             result[field_name] = _read_scalar_field(field_name, field_type, base_path)
 
@@ -187,12 +228,14 @@ def _read_scalar_field(
 def _read_array_of_objects(
     array_dir: Path,
     items_schema: dict[str, Any],
+    root_schema: dict[str, Any],
 ) -> list[dict[str, Any]]:
     """Read array of objects from numbered subdirectories.
 
     Args:
         array_dir: Directory containing numbered subdirectories
         items_schema: Schema for array items
+        root_schema: Root schema for resolving $ref
 
     Returns:
         List of parsed objects
@@ -200,7 +243,7 @@ def _read_array_of_objects(
     subdirs = sorted([d for d in array_dir.iterdir() if d.is_dir()])
     items: list[dict[str, Any]] = []
     for subdir in subdirs:
-        item_data = read_structure_from_filesystem(items_schema, subdir)
+        item_data = read_structure_from_filesystem(items_schema, subdir, root_schema)
         items.append(item_data)
     return items
 
@@ -255,6 +298,7 @@ def _read_array_field(
     field_name: str,
     field_schema: dict[str, Any],
     base_path: Path,
+    root_schema: dict[str, Any],
 ) -> list[Any]:
     """Read array field from directory with numbered files/subdirs."""
     array_dir = base_path / field_name
@@ -286,7 +330,7 @@ def _read_array_field(
     item_type = items_schema.get("type", "string")
 
     if item_type == "object":
-        return _read_array_of_objects(array_dir, items_schema)
+        return _read_array_of_objects(array_dir, items_schema, root_schema)
     else:
         return _read_array_of_primitives(array_dir, item_type)
 
@@ -295,6 +339,7 @@ def _read_object_field(
     field_name: str,
     field_schema: dict[str, Any],
     base_path: Path,
+    root_schema: dict[str, Any],
 ) -> dict[str, Any]:
     """Read object field from subdirectory."""
     object_dir = base_path / field_name
@@ -315,7 +360,7 @@ def _read_object_field(
             f"rm {object_dir} && mkdir -p {object_dir}"
         )
 
-    return read_structure_from_filesystem(field_schema, object_dir)
+    return read_structure_from_filesystem(field_schema, object_dir, root_schema)
 
 
 def build_structure_instructions(schema: dict[str, Any], temp_dir: str) -> str:
@@ -332,10 +377,10 @@ def build_structure_instructions(schema: dict[str, Any], temp_dir: str) -> str:
     required_fields = schema.get("required", [])
 
     # Build field descriptions
-    field_descriptions = _build_field_descriptions(properties)
+    field_descriptions = _build_field_descriptions(properties, schema)
 
     # Build example structure
-    example_structure = _build_example_structure(properties)
+    example_structure = _build_example_structure(properties, schema)
 
     instructions = f"""Task: Organize your response into separate files and directories.
 
@@ -356,12 +401,13 @@ How to organize information:
 3. True/false values: Write to a .txt file (just "true" or "false")
    Example: active.txt contains "true"
 
-4. Collections of items: Create a directory, then numbered files or subdirectories
-   Example for simple items: tags/0000.txt, tags/0001.txt, tags/0002.txt
-   Example for complex items: chapters/0000/, chapters/0001/ (each contains files)
+4. Ordered items: Create a subfolder, then numbered files for values or subdirectories for items
+   Example for values: tags/0000.txt, tags/0001.txt, tags/0002.txt
+   Example for items: chapters/0000/, chapters/0001/ (CANNOT BE EMPTY, must contain files for values or subfolders for items)
 
-5. Nested groups: Create a subdirectory containing files
-   Example: author/first_name.txt, author/last_name.txt
+5. Labelled items: Create a subfolder, then create appropriately named files for values or subfolders for items
+   Example for values: author/first_name.txt, author/last_name.txt
+   Example for items: author/profile/, author/bibliography/ (CANNOT BE EMPTY, must contain files for values or subfolders for items)
 
 Information to provide:
 {chr(10).join(field_descriptions)}
@@ -369,18 +415,22 @@ Information to provide:
 Example structure:
 {example_structure}
 
-Required information: {", ".join(required_fields) if required_fields else "all listed above"}"""
+Required information: {", ".join(required_fields) if required_fields else "all listed above"}
+
+CRITICAL: After reading the request below, you MUST create the complete file/folder structure with ALL required information populated from the request. Extract all necessary values, names, and data from the request text to fill in the structure completely. Do not leave any required folders empty or files missing."""
 
     return instructions
 
 
 def _build_field_descriptions(
-    properties: dict[str, Any], prefix: str = ""
+    properties: dict[str, Any], root_schema: dict[str, Any], prefix: str = ""
 ) -> list[str]:
     """Build field descriptions without JSON terminology."""
     descriptions = []
 
     for field_name, field_schema in properties.items():
+        # Resolve $ref if present
+        field_schema = _resolve_schema_ref(field_schema, root_schema)
         field_type = field_schema.get("type", "string")
         field_path = f"{prefix}{field_name}"
         field_desc = field_schema.get("description", "")
@@ -394,26 +444,29 @@ def _build_field_descriptions(
                 items_props = items_schema.get("properties", {})
                 nested_fields = ", ".join(items_props.keys())
                 descriptions.append(
-                    f"- {field_path}: Collection of items. Create directory '{field_path}/', "
-                    f"then numbered subdirectories (0000/, 0001/, ...) each containing: {nested_fields}{desc_suffix}"
+                    f"- {field_path}: Subfolder containing ordered subfolders and/or values (cannot be empty). "
+                    f"Create directory '{field_path}/', then numbered subdirectories (0000/, 0001/, ...) "
+                    f"each containing: {nested_fields}{desc_suffix}"
                 )
             else:
                 type_desc = _get_type_description(item_type)
                 descriptions.append(
-                    f"- {field_path}: Collection of {type_desc}. Create directory '{field_path}/', "
-                    f"then numbered files (0000.txt, 0001.txt, ...){desc_suffix}"
+                    f"- {field_path}: Subfolder containing ordered subfolders and/or values (cannot be empty). "
+                    f"Create directory '{field_path}/', then numbered files (0000.txt, 0001.txt, ...) "
+                    f"containing each {type_desc.lower()}{desc_suffix}"
                 )
         elif field_type == "object":
             nested_props = field_schema.get("properties", {})
             if nested_props:
-                nested_fields = ", ".join(nested_props.keys())
+                nested_fields = ", ".join(f"{name}.txt" for name in nested_props.keys())
                 descriptions.append(
-                    f"- {field_path}: Group containing: {nested_fields}. Create directory '{field_path}/', "
-                    f"then a file for each item inside{desc_suffix}"
+                    f"- {field_path}: Subfolder containing labelled subfolders and/or values (cannot be empty). "
+                    f"Create directory '{field_path}/', then create files: {nested_fields}{desc_suffix}"
                 )
             else:
                 descriptions.append(
-                    f"- {field_path}: Group. Create directory '{field_path}/'{desc_suffix}"
+                    f"- {field_path}: Subfolder containing labelled subfolders and/or values (cannot be empty). "
+                    f"Create directory '{field_path}/', then create appropriately named files for each value inside{desc_suffix}"
                 )
         else:
             type_desc = _get_type_description(field_type)
@@ -438,27 +491,38 @@ def _get_type_description(field_type: str) -> str:
 def _build_array_of_objects_example(
     indent_str: str,
     items_props: dict[str, Any],
+    root_schema: dict[str, Any],
 ) -> list[str]:
     """Build example tree lines for array of objects.
 
     Args:
         indent_str: Indentation string for current level
         items_props: Properties of each object in the array
+        root_schema: Root schema for resolving $ref
 
     Returns:
         List of tree lines showing example array structure
     """
     lines = []
-    lines.append(f"{indent_str}    ├── 0000/")
-    for sub_idx, (sub_name, _) in enumerate(items_props.items()):
+    lines.append(f"{indent_str}    ├── [item_0]/")
+    for sub_idx, (sub_name, sub_schema) in enumerate(items_props.items()):
+        # Resolve $ref if present
+        sub_schema = _resolve_schema_ref(sub_schema, root_schema)
+        sub_desc = sub_schema.get("description", "")
         sub_is_last = sub_idx == len(items_props) - 1
         sub_branch = "└── " if sub_is_last else "├── "
-        lines.append(f"{indent_str}    │   {sub_branch}{sub_name}.txt")
-    lines.append(f"{indent_str}    └── 0001/")
-    for sub_idx, (sub_name, _) in enumerate(items_props.items()):
+        desc_comment = f"  # {sub_desc}" if sub_desc else ""
+        lines.append(f"{indent_str}    │   {sub_branch}{sub_name}.txt{desc_comment}")
+    lines.append(f"{indent_str}    ├── [item_1]/")
+    for sub_idx, (sub_name, sub_schema) in enumerate(items_props.items()):
+        # Resolve $ref if present
+        sub_schema = _resolve_schema_ref(sub_schema, root_schema)
+        sub_desc = sub_schema.get("description", "")
         sub_is_last = sub_idx == len(items_props) - 1
         sub_branch = "└── " if sub_is_last else "├── "
-        lines.append(f"{indent_str}        {sub_branch}{sub_name}.txt")
+        desc_comment = f"  # {sub_desc}" if sub_desc else ""
+        lines.append(f"{indent_str}    │   {sub_branch}{sub_name}.txt{desc_comment}")
+    lines.append(f"{indent_str}    └── ...")
     return lines
 
 
@@ -472,9 +536,9 @@ def _build_array_of_primitives_example(indent_str: str) -> list[str]:
         List of tree lines showing example array structure
     """
     return [
-        f"{indent_str}    ├── 0000.txt",
-        f"{indent_str}    ├── 0001.txt",
-        f"{indent_str}    └── 0002.txt",
+        f"{indent_str}    ├── [item_0].txt",
+        f"{indent_str}    ├── [item_1].txt",
+        f"{indent_str}    └── ...",
     ]
 
 
@@ -482,6 +546,7 @@ def _build_object_example(
     indent_str: str,
     is_last: bool,
     nested_props: dict[str, Any],
+    root_schema: dict[str, Any],
 ) -> list[str]:
     """Build example tree lines for object field.
 
@@ -489,49 +554,72 @@ def _build_object_example(
         indent_str: Indentation string for current level
         is_last: Whether this is the last field at current level
         nested_props: Properties of the nested object
+        root_schema: Root schema for resolving $ref
 
     Returns:
         List of tree lines showing example object structure
     """
     lines = []
-    for sub_idx, (sub_name, _) in enumerate(nested_props.items()):
-        sub_is_last = sub_idx == len(nested_props) - 1
-        sub_branch = "└── " if sub_is_last else "├── "
+
+    if nested_props:
+        # Object has defined properties - show them
+        for sub_idx, (sub_name, sub_schema) in enumerate(nested_props.items()):
+            # Resolve $ref if present
+            sub_schema = _resolve_schema_ref(sub_schema, root_schema)
+            sub_desc = sub_schema.get("description", "")
+            sub_is_last = sub_idx == len(nested_props) - 1
+            sub_branch = "└── " if sub_is_last else "├── "
+            desc_comment = f"  # {sub_desc}" if sub_desc else ""
+            if is_last:
+                lines.append(f"{indent_str}    {sub_branch}{sub_name}.txt{desc_comment}")
+            else:
+                lines.append(f"{indent_str}│   {sub_branch}{sub_name}.txt{desc_comment}")
+    else:
+        # Object has no defined properties - show template examples with "cannot be empty" indicator
         if is_last:
-            lines.append(f"{indent_str}    {sub_branch}{sub_name}.txt")
+            lines.append(f"{indent_str}    ├── [value_name_extracted_from_request].txt")
+            lines.append(f"{indent_str}    └── [item_name_extracted_from_request]/")
+            lines.append(f"{indent_str}        └── ...")
         else:
-            lines.append(f"{indent_str}│   {sub_branch}{sub_name}.txt")
+            lines.append(f"{indent_str}│   ├── [value_name_extracted_from_request].txt")
+            lines.append(f"{indent_str}│   └── [item_name_extracted_from_request]/")
+            lines.append(f"{indent_str}│       └── ...")
+
     return lines
 
 
 def _build_example_structure(
-    properties: dict[str, Any], prefix: str = "", indent: int = 0
+    properties: dict[str, Any], root_schema: dict[str, Any], indent: int = 0
 ) -> str:
     """Build example directory tree structure."""
     lines = []
     indent_str = "  " * indent
 
     for idx, (field_name, field_schema) in enumerate(properties.items()):
+        # Resolve $ref if present
+        field_schema = _resolve_schema_ref(field_schema, root_schema)
         field_type = field_schema.get("type", "string")
+        field_desc = field_schema.get("description", "")
         is_last = idx == len(properties) - 1
         branch = "└── " if is_last else "├── "
+        desc_comment = f"  # {field_desc}" if field_desc else ""
 
         if field_type == "array":
             items_schema = field_schema.get("items", {})
             item_type = items_schema.get("type", "string")
 
-            lines.append(f"{indent_str}{branch}{field_name}/")
+            lines.append(f"{indent_str}{branch}{field_name}/{desc_comment}")
 
             if item_type == "object":
                 items_props = items_schema.get("properties", {})
-                lines.extend(_build_array_of_objects_example(indent_str, items_props))
+                lines.extend(_build_array_of_objects_example(indent_str, items_props, root_schema))
             else:
                 lines.extend(_build_array_of_primitives_example(indent_str))
         elif field_type == "object":
-            lines.append(f"{indent_str}{branch}{field_name}/")
+            lines.append(f"{indent_str}{branch}{field_name}/{desc_comment}")
             nested_props = field_schema.get("properties", {})
-            lines.extend(_build_object_example(indent_str, is_last, nested_props))
+            lines.extend(_build_object_example(indent_str, is_last, nested_props, root_schema))
         else:
-            lines.append(f"{indent_str}{branch}{field_name}.txt")
+            lines.append(f"{indent_str}{branch}{field_name}.txt{desc_comment}")
 
     return "\n".join(lines)

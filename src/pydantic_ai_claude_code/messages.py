@@ -46,7 +46,7 @@ def format_messages_for_claude(
                         # System prompts are prepended
                         parts.insert(0, f"System: {req_part.content}")
                 elif isinstance(req_part, UserPromptPart):
-                    parts.append(f"User: {req_part.content}")
+                    parts.append(f"Request: {req_part.content}")
                 elif isinstance(req_part, ToolReturnPart):
                     # Format tool returns as plain contextual data (no mention of tools/functions)
                     parts.append(f"Context: {req_part.content}")

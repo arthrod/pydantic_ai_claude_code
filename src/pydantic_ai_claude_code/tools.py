@@ -25,12 +25,17 @@ def format_tools_for_prompt(tools: list[ToolDefinition]) -> str:
         logger.debug("No tools to format for prompt")
         return ""
 
-    logger.debug("Formatting %d tools for prompt", len(tools))
+    logger.info("=" * 80)
+    logger.info("FORMATTING TOOLS FOR PROMPT - Total tools: %d", len(tools))
+    logger.info("=" * 80)
 
     # Build simple natural descriptions
     func_descriptions = []
     for tool in tools:
-        logger.debug("Adding function to prompt: %s", tool.name)
+        logger.info("Tool: %s", tool.name)
+        logger.info("  Description: %s", tool.description)
+        logger.info("  Schema: %s", json.dumps(tool.parameters_json_schema, indent=2))
+
         params = tool.parameters_json_schema.get("properties", {})
         param_list = ", ".join(params.keys())
         func_descriptions.append(
@@ -46,7 +51,7 @@ If you need data from external functions:
 3. Second turn: Answer the user's question using that data - DO NOT call EXECUTE again
 
 Example:
-User: What's 5 + 3?
+Request: What's 5 + 3?
 You: EXECUTE: add(a=5, b=3)
 Tool Result (add): 8
 You: The answer is 8.
@@ -56,6 +61,12 @@ Available functions:
 
 CRITICAL: If you see "Tool Result" in the conversation, that means you already called the function. Use that result to answer - DO NOT output EXECUTE again!
 """
+    logger.info("=" * 80)
+    logger.info("GENERATED TOOLS PROMPT:")
+    logger.info("=" * 80)
+    logger.info("%s", tools_prompt)
+    logger.info("=" * 80)
+
     return tools_prompt
 
 
@@ -256,19 +267,26 @@ def parse_tool_calls(response_text: str) -> list[ToolCallPart] | None:
     Returns:
         List of ToolCallPart objects if tool calls detected, None otherwise
     """
-    logger.debug("Parsing tool calls from response (%d chars)", len(response_text))
+    logger.info("=" * 80)
+    logger.info("PARSING TOOL CALLS FROM RESPONSE (%d chars)", len(response_text))
+    logger.info("=" * 80)
+    logger.info("Response text:\n%s", response_text)
+    logger.info("=" * 80)
 
     # Try EXECUTE format first
     result = _parse_execute_format(response_text)
     if result:
+        logger.info("Successfully parsed EXECUTE format - found %d tool calls", len(result))
         return result
 
     # Try legacy JSON format
     result = _parse_legacy_json_format(response_text)
     if result:
+        logger.info("Successfully parsed legacy JSON format - found %d tool calls", len(result))
         return result
 
-    logger.debug("No tool calls found in response")
+    logger.warning("NO TOOL CALLS FOUND IN RESPONSE!")
+    logger.warning("Response was likely plain text instead of a tool call")
     return None
 
 

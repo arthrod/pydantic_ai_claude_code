@@ -285,19 +285,40 @@ def test_agent_tool_with_multiple_param_types():
 
 
 def test_agent_tool_with_object_param():
-    """Test tool with object/dict parameter."""
+    """Test tool with structured config parameter using Pydantic model.
 
-    def analyze_config(config: dict) -> str:
-        """Analyze a configuration object."""
-        return f"Config has {len(config)} settings: {', '.join(config.keys())}"
+    Validates that the Pydantic model is correctly constructed from the file/folder structure.
+    """
+
+    from pydantic import BaseModel, Field
+
+    class AppConfig(BaseModel):
+        """Application configuration settings."""
+        theme: str = Field(description="UI theme (light/dark)")
+        language: str = Field(description="Language code (e.g., en, fr)")
+        notifications: bool = Field(description="Whether notifications are enabled")
+
+    # Capture tool arguments to validate Pydantic model construction
+    captured_config = {}
+
+    def analyze_config(config: AppConfig) -> str:
+        """Analyze application configuration."""
+        captured_config["config"] = config
+        return f"Config analyzed"
 
     agent = Agent("claude-code:sonnet", tools=[analyze_config])
     result = agent.run_sync(
         "Analyze this config: theme=dark, language=en, notifications=true"
     )
 
-    # Should extract and pass object to tool
-    assert "settings" in result.output.lower() or "config" in result.output.lower()
+    # Validate the Pydantic model was correctly constructed from file structure
+    assert isinstance(captured_config["config"], AppConfig)
+    assert captured_config["config"].theme == "dark"
+    assert captured_config["config"].language == "en"
+    assert captured_config["config"].notifications is True
+
+    # Ensure agent produced output
+    assert result.output and len(result.output) > 0
 
 
 @pytest.mark.flaky(reruns=4, reruns_delay=1)
@@ -384,24 +405,47 @@ def test_agent_tool_list_return():
 
 
 def test_agent_tool_complex_nested_params():
-    """Test tool with complex nested parameters."""
+    """Test tool with complex nested parameters using Pydantic models and Annotated Field descriptions.
+
+    Validates that the Pydantic model is correctly constructed from the file/folder structure.
+    """
+
+    from typing import Annotated
+    from pydantic import BaseModel, Field
+
+    class UserProfile(BaseModel):
+        """User profile information."""
+        age: int = Field(description="User's age in years")
+        city: str = Field(description="City where the user lives")
+
+    # Capture tool arguments to validate Pydantic model construction
+    captured_args = {}
 
     def create_user(
-        username: str,
-        profile: dict,
-        roles: list[str],
+        username: Annotated[str, Field(description="Unique username for the user")],
+        profile: UserProfile,
+        roles: Annotated[list[str], Field(description="List of role names to assign")],
     ) -> str:
         """Create a user with profile and roles."""
-        return f"Created user {username} with roles {', '.join(roles)}"
+        captured_args["username"] = username
+        captured_args["profile"] = profile
+        captured_args["roles"] = roles
+        return f"Created user {username}"
 
     agent = Agent("claude-code:sonnet", tools=[create_user])
     result = agent.run_sync(
         "Create user 'alice' with profile age=30, city=London and roles admin, editor"
     )
 
-    output = result.output.lower()
-    assert "alice" in output
-    assert ("admin" in output and "editor" in output) or "created" in output
+    # Validate the Pydantic model was correctly constructed from file structure
+    assert captured_args["username"] == "alice"
+    assert isinstance(captured_args["profile"], UserProfile)
+    assert captured_args["profile"].age == 30
+    assert captured_args["profile"].city == "London"
+    assert set(captured_args["roles"]) == {"admin", "editor"}
+
+    # Ensure agent produced output
+    assert result.output and len(result.output) > 0
 
 
 def test_agent_no_tool_needed():

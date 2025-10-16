@@ -35,17 +35,29 @@ class ListResult(BaseModel):
 
 @pytest.mark.asyncio
 async def test_single_int():
-    """Test single integer field."""
+    """Test single integer field.
+
+    Validates that the Pydantic model is correctly constructed from the file/folder structure.
+    """
     agent = Agent("claude-code:haiku", output_type=SingleInt)
     result = await agent.run("What is 5 + 3?")
+
+    # Validate the structured response is the correct Pydantic model
+    assert isinstance(result.output, SingleInt)
     assert result.output.value == EXPECTED_SUM_5_PLUS_3
 
 
 @pytest.mark.asyncio
 async def test_multi_field():
-    """Test multiple fields with different types."""
+    """Test multiple fields with different types.
+
+    Validates that the Pydantic model is correctly constructed from the file/folder structure.
+    """
     agent = Agent("claude-code:haiku", output_type=MultiField)
     result = await agent.run("Number: 42, Text: hello, Flag: true")
+
+    # Validate the structured response is the correct Pydantic model
+    assert isinstance(result.output, MultiField)
     assert result.output.number == EXPECTED_TEST_NUMBER
     assert isinstance(result.output.text, str)
     assert isinstance(result.output.flag, bool)
@@ -53,8 +65,14 @@ async def test_multi_field():
 
 @pytest.mark.asyncio
 async def test_list_result():
-    """Test result with list field."""
+    """Test result with list field.
+
+    Validates that the Pydantic model is correctly constructed from the file/folder structure.
+    """
     agent = Agent("claude-code:haiku", output_type=ListResult)
     result = await agent.run("List 3 colors: red, blue, green")
+
+    # Validate the structured response is the correct Pydantic model
+    assert isinstance(result.output, ListResult)
     assert len(result.output.items) == EXPECTED_COLOR_COUNT
     assert isinstance(result.output.items, list)

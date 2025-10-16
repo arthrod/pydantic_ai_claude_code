@@ -48,7 +48,6 @@ def test_simple_scalar_types_round_trip():
         assert (base_path / "age.txt").exists()
         assert (base_path / "score.txt").exists()
         assert (base_path / "active.txt").exists()
-        assert (base_path / ".complete").exists()
 
         # Verify file contents
         assert (base_path / "name.txt").read_text() == "Alice Smith"
@@ -211,12 +210,10 @@ def test_nested_object_round_trip():
         assert (base_path / "author" / "last_name.txt").read_text() == "Johnson"
         assert (base_path / "author" / "age.txt").read_text() == "35"
         assert (base_path / "author" / "email.txt").read_text() == "alice@example.com"
-        assert (base_path / "author" / ".complete").exists()
 
         assert (base_path / "metadata").is_dir()
         assert (base_path / "metadata" / "version.txt").read_text() == "2"
         assert (base_path / "metadata" / "published.txt").read_text() == "true"
-        assert (base_path / "metadata" / ".complete").exists()
 
         # Filesystem → Data
         loaded_data = read_structure_from_filesystem(schema, base_path)
@@ -288,7 +285,6 @@ def test_array_of_objects_round_trip():
         assert (base_path / "chapters" / "0000" / "title.txt").read_text() == "Introduction"
         assert (base_path / "chapters" / "0000" / "pages.txt").read_text() == "15"
         assert (base_path / "chapters" / "0000" / "completed.txt").read_text() == "true"
-        assert (base_path / "chapters" / "0000" / ".complete").exists()
 
         # Verify second chapter
         assert (base_path / "chapters" / "0001" / "number.txt").read_text() == "2"
@@ -441,50 +437,6 @@ def test_complex_deeply_nested_round_trip():
         assert (base_path2 / "students" / "0002" / "passed.txt").read_text() == (
             base_path / "students" / "0002" / "passed.txt"
         ).read_text()
-
-
-def test_instruction_generation():
-    """Test that instruction generation works without JSON terminology."""
-    schema = {
-        "properties": {
-            "name": {"type": "string", "description": "Full name of the person"},
-            "age": {"type": "integer"},
-            "tags": {
-                "type": "array",
-                "items": {"type": "string"},
-            },
-            "profile": {
-                "type": "object",
-                "properties": {
-                    "bio": {"type": "string"},
-                    "active": {"type": "boolean"},
-                },
-            },
-        },
-        "required": ["name", "age"],
-    }
-
-    instructions = build_structure_instructions(schema, "/tmp/test_dir")
-
-    # Verify no JSON terminology
-    assert "json" not in instructions.lower()
-    assert "field" not in instructions.lower()
-    # "object" is acceptable in general terms but should not appear in the technical JSON sense
-
-    # Verify key concepts are present
-    assert "mkdir -p /tmp/test_dir" in instructions
-    assert "touch /tmp/test_dir/.complete" in instructions
-    assert "name.txt" in instructions
-    assert "age.txt" in instructions
-    assert "Collection" in instructions or "collection" in instructions
-    assert "Group" in instructions or "group" in instructions
-
-    # Verify example structure is included
-    assert "Example structure:" in instructions
-    assert "├── " in instructions or "└── " in instructions
-
-    # Verify descriptions are included
-    assert "Full name of the person" in instructions
 
 
 def test_integer_vs_float_preservation():

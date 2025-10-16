@@ -20,17 +20,6 @@ EXPECTED_TOTAL_MESSAGES = 4  # Total messages in full conversation test
 EXPECTED_ASSISTANT_MESSAGES = 2  # Number of assistant messages in full conversation test
 
 
-def test_format_simple_user_message():
-    """Test formatting a simple user message."""
-    messages = [
-        ModelRequest(parts=[UserPromptPart(content="Hello, Claude!")]),
-    ]
-
-    formatted = format_messages_for_claude(messages)
-
-    assert "User: Hello, Claude!" in formatted
-
-
 def test_format_system_prompt():
     """Test that system prompt is prepended."""
     messages = [
@@ -45,9 +34,9 @@ def test_format_system_prompt():
     formatted = format_messages_for_claude(messages)
 
     assert "System: You are a helpful assistant." in formatted
-    assert "User: What is 2+2?" in formatted
-    # System should come before User
-    assert formatted.index("System:") < formatted.index("User:")
+    assert "Request: What is 2+2?" in formatted
+    # System should come before Request
+    assert formatted.index("System:") < formatted.index("Request:")
 
 
 def test_format_conversation():
@@ -60,9 +49,9 @@ def test_format_conversation():
 
     formatted = format_messages_for_claude(messages)
 
-    assert "User: What is 2+2?" in formatted
+    assert "Request: What is 2+2?" in formatted
     assert "Assistant: 4" in formatted
-    assert "User: What about 3+3?" in formatted
+    assert "Request: What about 3+3?" in formatted
 
 
 def test_format_tool_call():

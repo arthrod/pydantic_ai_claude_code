@@ -160,10 +160,18 @@ The file must contain ONLY your direct answer - no preambles, no meta-commentary
         Returns:
             Tuple of (prompt string, available functions dict)
         """
+        logger.info("=" * 80)
+        logger.info("BUILDING FUNCTION TOOLS PROMPT - Total tools: %d", len(function_tools))
+        logger.info("=" * 80)
+
         option_descriptions = []
         for i, tool in enumerate(function_tools, 1):
             desc = tool.description or "No description"
             schema = tool.parameters_json_schema
+            logger.info("Tool %d: %s", i, tool.name)
+            logger.info("  Description: %s", desc)
+            logger.info("  Schema: %s", json.dumps(schema, indent=2))
+
             params = schema.get("properties", {})
             param_hints = []
             for param_name, param_schema in params.items():
@@ -546,10 +554,11 @@ Please fix the issues above and try again. Follow the directory structure instru
 
         for attempt in range(max_retries + 1):
             if attempt == 0:
-                logger.debug(
-                    "Making argument collection request with prompt length: %d",
-                    len(arg_prompt),
-                )
+                logger.info("=" * 80)
+                logger.info("PHASE 2: ARGUMENT COLLECTION - Prompt length: %d", len(arg_prompt))
+                logger.info("=" * 80)
+                logger.info("%s", arg_prompt)
+                logger.info("=" * 80)
                 current_prompt = arg_prompt
             else:
                 logger.info(
@@ -560,7 +569,11 @@ Please fix the issues above and try again. Follow the directory structure instru
                 current_prompt = self._build_retry_prompt(
                     messages, schema, arg_settings, error_msg
                 )
-                logger.debug("Retry prompt length: %d", len(current_prompt))
+                logger.info("=" * 80)
+                logger.info("RETRY PROMPT - length: %d", len(current_prompt))
+                logger.info("=" * 80)
+                logger.info("%s", current_prompt)
+                logger.info("=" * 80)
 
             model_response, error_msg, arg_response = await self._try_collect_arguments(
                 current_prompt,
@@ -568,6 +581,16 @@ Please fix the issues above and try again. Follow the directory structure instru
                 selected_function,
                 schema,
             )
+
+            if model_response or error_msg:
+                logger.info("=" * 80)
+                logger.info("PHASE 2: ARGUMENT COLLECTION RESULT")
+                logger.info("=" * 80)
+                if model_response:
+                    logger.info("Success! Extracted args: %s", model_response.parts[0].args if model_response.parts else "N/A")
+                if error_msg:
+                    logger.info("Error: %s", error_msg)
+                logger.info("=" * 80)
 
             if model_response:
                 return model_response
@@ -685,12 +708,17 @@ Please fix the issues above and try again. Follow the directory structure instru
         )
 
         # Run Claude CLI and convert response
-        logger.debug("=" * 80)
-        logger.debug("FULL PROMPT BEING SENT TO CLAUDE:")
-        logger.debug("=" * 80)
-        logger.debug("%s", prompt)
-        logger.debug("=" * 80)
+        logger.info("=" * 80)
+        logger.info("FULL PROMPT BEING SENT TO CLAUDE:")
+        logger.info("=" * 80)
+        logger.info("%s", prompt)
+        logger.info("=" * 80)
         response = await run_claude_async(prompt, settings=settings)
+        logger.info("=" * 80)
+        logger.info("CLAUDE RESPONSE:")
+        logger.info("=" * 80)
+        logger.info("%s", json.dumps(response, indent=2))
+        logger.info("=" * 80)
         result = self._convert_response(
             response,
             output_tools=output_tools,
@@ -1047,8 +1075,6 @@ Then provide your complete response after the marker.
                 )
                 with open(unstructured_file) as f:
                     file_content = f.read()
-                # Cleanup temp file
-                self._cleanup_temp_file(unstructured_file)
                 logger.debug(
                     "Successfully read %d bytes from unstructured output file",
                     len(file_content),
@@ -1209,20 +1235,14 @@ Then provide your complete response after the marker.
             # Use new structure converter to read and validate
             parsed_data = read_structure_from_filesystem(schema, temp_path)
             logger.debug("Successfully read JSON from directory structure")
-
-            # Clean up temp directory
-            self._cleanup_temp_directory(temp_path)
-            logger.debug("Cleaned up temp directory")
             return parsed_data, None
 
         except RuntimeError as e:
             # RuntimeError contains user-friendly error messages from converter
             logger.error("Failed to read directory structure: %s", e)
-            self._cleanup_temp_directory(temp_path)
             return None, str(e)
         except Exception as e:
             logger.error("Unexpected error reading directory: %s", e)
-            self._cleanup_temp_directory(temp_path)
             return None, f"Could not read the data structure: {e}"
 
     def _try_read_json_file(
@@ -1252,7 +1272,6 @@ Then provide your complete response after the marker.
             logger.debug("Read %d bytes from structured output file", len(file_content))
         except Exception as e:
             logger.error("Failed to read structured output file: %s", e)
-            self._cleanup_temp_file(file_path)
             return None, f"Failed to read file: {e}"
 
         # Parse JSON
@@ -1261,7 +1280,6 @@ Then provide your complete response after the marker.
             logger.debug("Successfully parsed JSON from structured output file")
         except json.JSONDecodeError as e:
             logger.error("Invalid JSON in structured output file: %s", e)
-            self._cleanup_temp_file(file_path)
             return (
                 None,
                 f"The file content isn't formatted correctly: {e}\nFile content:\n{file_content}",
@@ -1271,12 +1289,10 @@ Then provide your complete response after the marker.
         validation_error = self._validate_json_schema(parsed_data, schema)
         if validation_error:
             logger.error("Schema validation failed: %s", validation_error)
-            self._cleanup_temp_file(file_path)
             return None, validation_error
 
-        # Validation passed - clean up file
-        logger.debug("Structured output validated successfully, cleaning up file")
-        self._cleanup_temp_file(file_path)
+        # Validation passed
+        logger.debug("Structured output validated successfully")
         return parsed_data, None
 
     def _read_structured_output_file(
