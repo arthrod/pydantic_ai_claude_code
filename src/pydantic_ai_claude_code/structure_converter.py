@@ -35,6 +35,78 @@ def _resolve_schema_ref(field_schema: dict[str, Any], root_schema: dict[str, Any
     return field_schema
 
 
+def _is_nullable(field_schema: dict[str, Any]) -> bool:
+    """Check if a field schema allows null/None values.
+
+    Args:
+        field_schema: Field schema to check
+
+    Returns:
+        True if the field can be None/null
+    """
+    # Check for explicit null type
+    if field_schema.get("type") == "null":
+        return True
+
+    # Check for anyOf/oneOf containing null
+    for key in ("anyOf", "oneOf"):
+        if key in field_schema:
+            for option in field_schema[key]:
+                if option.get("type") == "null":
+                    return True
+
+    return False
+
+
+def _get_non_null_type(field_schema: dict[str, Any]) -> str | None:
+    """Get the non-null type from a schema that may use anyOf/oneOf.
+
+    Args:
+        field_schema: Field schema
+
+    Returns:
+        The non-null type, or None if not found
+    """
+    # Direct type
+    if "type" in field_schema and field_schema["type"] != "null":
+        return field_schema["type"]
+
+    # Check anyOf/oneOf for non-null type
+    for key in ("anyOf", "oneOf"):
+        if key in field_schema:
+            for option in field_schema[key]:
+                if option.get("type") and option["type"] != "null":
+                    return option["type"]
+
+    return None
+
+
+def _get_non_null_schema(field_schema: dict[str, Any]) -> dict[str, Any]:
+    """Get the non-null schema from a schema that may use anyOf/oneOf.
+
+    For schemas with anyOf/oneOf containing null, this returns the non-null option.
+    Otherwise returns the schema as-is.
+
+    Args:
+        field_schema: Field schema
+
+    Returns:
+        The non-null schema
+    """
+    # If no anyOf/oneOf, return as-is
+    if "anyOf" not in field_schema and "oneOf" not in field_schema:
+        return field_schema
+
+    # Check anyOf/oneOf for non-null schema
+    for key in ("anyOf", "oneOf"):
+        if key in field_schema:
+            for option in field_schema[key]:
+                if option.get("type") != "null":
+                    return option
+
+    return field_schema
+
+
 def write_structure_to_filesystem(
     data: dict[str, Any],
     schema: dict[str, Any],
@@ -81,7 +153,14 @@ def _write_scalar_field(
     field_type: str,
     base_path: Path,
 ) -> None:
-    """Write scalar field to .txt file."""
+    """Write scalar field to .txt file.
+
+    None values are not written (no file created).
+    """
+    # None/null values -> don't create file
+    if value is None:
+        return
+
     file_path = base_path / f"{field_name}.txt"
 
     if field_type == "boolean":
@@ -106,17 +185,25 @@ def _write_array_field(
     array_dir.mkdir(parents=True, exist_ok=True)
 
     items_schema = field_schema.get("items", {})
-    item_type = items_schema.get("type", "string")
+    items_schema = _resolve_schema_ref(items_schema, root_schema)
+    # Get non-null schema (handles anyOf with null)
+    items_schema_non_null = _get_non_null_schema(items_schema)
+    item_type = _get_non_null_type(items_schema) or "string"
 
     for idx, item in enumerate(value):
         item_name = f"{idx:04d}"
 
         if item_type == "object":
-            # Array of objects: create numbered subdirectories
+            # Array of objects: None items don't create subdirectories (creates gaps)
+            if item is None:
+                continue
             item_dir = array_dir / item_name
-            write_structure_to_filesystem(item, items_schema, item_dir, root_schema)
+            write_structure_to_filesystem(item, items_schema_non_null, item_dir, root_schema)
         else:
-            # Array of primitives: create numbered .txt files
+            # Array of primitives: None items don't create files (creates gaps)
+            if item is None:
+                continue
+
             item_file = array_dir / f"{item_name}.txt"
             if item_type == "boolean":
                 content = "true" if item else "false"
@@ -176,6 +263,7 @@ def read_structure_from_filesystem(
         field_schema = _resolve_schema_ref(field_schema, root_schema)
         field_type = field_schema.get("type", "string")
         is_required = field_name in required_fields
+        is_nullable = _is_nullable(field_schema)
 
         # Check if path exists for this field
         if field_type == "array":
@@ -185,11 +273,18 @@ def read_structure_from_filesystem(
         else:
             field_path = base_path / f"{field_name}.txt"
 
-        # Skip optional fields that don't exist on filesystem
-        if not field_path.exists() and not is_required:
-            continue
+        # Handle missing files/directories
+        if not field_path.exists():
+            if is_required and is_nullable:
+                # Required but nullable - missing file means None
+                result[field_name] = None
+                continue
+            elif not is_required:
+                # Optional field - skip it
+                continue
+            # else: required and not nullable - will raise error in read functions below
 
-        # Read the field (will raise error if required but missing)
+        # Read the field (will raise error if required but missing and not nullable)
         if field_type == "array":
             result[field_name] = _read_array_field(field_name, field_schema, base_path, root_schema)
         elif field_type == "object":
@@ -244,8 +339,10 @@ def _read_array_of_objects(
     array_dir: Path,
     items_schema: dict[str, Any],
     root_schema: dict[str, Any],
-) -> list[dict[str, Any]]:
+) -> list[dict[str, Any] | None]:
     """Read array of objects from numbered subdirectories.
+
+    Missing numbered subdirectories are treated as None values (creates gaps in array).
 
     Args:
         array_dir: Directory containing numbered subdirectories
@@ -253,13 +350,35 @@ def _read_array_of_objects(
         root_schema: Root schema for resolving $ref
 
     Returns:
-        List of parsed objects
+        List of parsed objects (with None for missing subdirectories)
     """
-    subdirs = sorted([d for d in array_dir.iterdir() if d.is_dir()])
-    items: list[dict[str, Any]] = []
+    subdirs = [d for d in array_dir.iterdir() if d.is_dir()]
+
+    # If no subdirs, return empty array
+    if not subdirs:
+        return []
+
+    # Find highest index to determine array length
+    max_idx = -1
+    dir_map: dict[int, Path] = {}
     for subdir in subdirs:
+        # Extract index from dirname (e.g., "0042" -> 42)
+        try:
+            idx = int(subdir.name)
+            dir_map[idx] = subdir
+            max_idx = max(max_idx, idx)
+        except ValueError:
+            # Skip directories that don't follow numbering pattern
+            continue
+
+    # Initialize array with None values
+    items: list[dict[str, Any] | None] = [None] * (max_idx + 1)
+
+    # Fill in values from existing subdirectories
+    for idx, subdir in dir_map.items():
         item_data = read_structure_from_filesystem(items_schema, subdir, root_schema)
-        items.append(item_data)
+        items[idx] = item_data
+
     return items
 
 
@@ -269,34 +388,57 @@ def _read_array_of_primitives(
 ) -> list[Any]:
     """Read array of primitives from numbered .txt files.
 
+    Missing numbered files are treated as None values (creates gaps in array).
+    Empty file content is treated as empty string for string types.
+
     Args:
         array_dir: Directory containing numbered .txt files
         item_type: Type of array items (string, integer, number, boolean)
 
     Returns:
-        List of parsed primitive values
+        List of parsed primitive values (with None for missing files)
 
     Raises:
         RuntimeError: If file content is invalid for the specified type
     """
     files = sorted(array_dir.glob("*.txt"))
-    items: list[Any] = []
 
+    # If no files, return empty array
+    if not files:
+        return []
+
+    # Find highest index to determine array length
+    max_idx = -1
+    file_map: dict[int, Path] = {}
     for file_path in files:
+        # Extract index from filename (e.g., "0042.txt" -> 42)
+        try:
+            idx = int(file_path.stem)
+            file_map[idx] = file_path
+            max_idx = max(max_idx, idx)
+        except ValueError:
+            # Skip files that don't follow numbering pattern
+            continue
+
+    # Initialize array with None values
+    items: list[Any] = [None] * (max_idx + 1)
+
+    # Fill in values from existing files
+    for idx, file_path in file_map.items():
         content = file_path.read_text().strip()
 
         try:
             if item_type == "integer":
-                items.append(int(content))
+                items[idx] = int(content)
             elif item_type == "number":
                 if "." in content or "e" in content.lower():
-                    items.append(float(content))
+                    items[idx] = float(content)
                 else:
-                    items.append(int(content))
+                    items[idx] = int(content)
             elif item_type == "boolean":
-                items.append(content.lower() in ("true", "1", "yes"))
+                items[idx] = content.lower() in ("true", "1", "yes")
             else:  # string
-                items.append(content)
+                items[idx] = content
         except ValueError as e:
             type_desc = _get_type_description(item_type)
             raise RuntimeError(
@@ -320,7 +462,8 @@ def _read_array_field(
 
     if not array_dir.exists():
         items_schema = field_schema.get("items", {})
-        item_type = items_schema.get("type", "string")
+        items_schema = _resolve_schema_ref(items_schema, root_schema)
+        item_type = _get_non_null_type(items_schema) or "string"
         if item_type == "object":
             raise RuntimeError(
                 f"Missing directory: {array_dir}\n"
@@ -342,10 +485,13 @@ def _read_array_field(
         )
 
     items_schema = field_schema.get("items", {})
-    item_type = items_schema.get("type", "string")
+    items_schema = _resolve_schema_ref(items_schema, root_schema)
+    # Get non-null schema (handles anyOf with null)
+    items_schema_non_null = _get_non_null_schema(items_schema)
+    item_type = _get_non_null_type(items_schema) or "string"
 
     if item_type == "object":
-        return _read_array_of_objects(array_dir, items_schema, root_schema)
+        return _read_array_of_objects(array_dir, items_schema_non_null, root_schema)
     else:
         return _read_array_of_primitives(array_dir, item_type)
 
@@ -417,6 +563,11 @@ Write to a `.txt` file containing the text content.
 name.txt contains "Alice"
 ```
 
+**Empty strings:**
+```
+description.txt contains "" (empty file for empty string)
+```
+
 ### 2. Numbers
 Write to a `.txt` file containing just the number.
 
@@ -434,16 +585,28 @@ Write to a `.txt` file containing just `"true"` or `"false"`.
 active.txt contains "true"
 ```
 
-### 4. Ordered Items
+### 4. None/Null Values
+**Do NOT create a file or directory** for None/null values.
+
+**Examples:**
+- `middle_name` is None → don't create `middle_name.txt`
+- `items[2]` is None in array → don't create `items/0002.txt` (skip that index)
+
+**Important:** Empty string (`""`) is DIFFERENT from None:
+- Empty string → create empty file
+- None/null → don't create file at all
+
+### 5. Ordered Items
 Create a subfolder, then numbered files for values **OR** numbered subdirectories for items.
 
 **Examples:**
 - **For values:** `tags/0000.txt`, `tags/0001.txt`, `tags/0002.txt`
 - **For items:** `chapters/0000/`, `chapters/0001/` (each directory contains its own files/subfolders)
+- **With None values:** `tags/0000.txt`, `tags/0002.txt` (skip 0001 if that value is None)
 
 > **IMPORTANT:** Subfolders for **ordered** items can be empty if there are no values or items to include.
 
-### 5. Labelled Items
+### 6. Labelled Items
 Create a subfolder, then create appropriately named files for values **OR** subfolders for items.
 
 **Examples:**
@@ -479,7 +642,8 @@ Create a subfolder, then create appropriately named files for values **OR** subf
 > - Extract **ALL** necessary values, names, and data from the request text
 > - Create the **COMPLETE** file/folder structure with ALL required information
 > - Do **NOT** leave any subfolders for labelled items empty or files missing
-> - Do **NOT** write any structured text formats (like JSON, YAML, etc.) - use the file/folder structure only"""
+> - Do **NOT** write any structured text formats (like JSON, YAML, etc.) - use the file/folder structure only
+> - **After creating files/folders, review your output** to ensure it's consistent, valid, and complete according to the requirements and information provided"""
 
     return instructions
 
@@ -500,10 +664,12 @@ def _build_field_descriptions(
 
         if field_type == "array":
             items_schema = field_schema.get("items", {})
-            item_type = items_schema.get("type", "string")
+            items_schema = _resolve_schema_ref(items_schema, root_schema)
+            items_schema_non_null = _get_non_null_schema(items_schema)
+            item_type = _get_non_null_type(items_schema) or "string"
 
             if item_type == "object":
-                items_props = items_schema.get("properties", {})
+                items_props = items_schema_non_null.get("properties", {})
                 nested_fields = ", ".join(items_props.keys())
                 descriptions.append(
                     f"- {field_path}: Subfolder containing ordered subfolders and/or values (cannot be empty). "
@@ -668,12 +834,14 @@ def _build_example_structure(
 
         if field_type == "array":
             items_schema = field_schema.get("items", {})
-            item_type = items_schema.get("type", "string")
+            items_schema = _resolve_schema_ref(items_schema, root_schema)
+            items_schema_non_null = _get_non_null_schema(items_schema)
+            item_type = _get_non_null_type(items_schema) or "string"
 
             lines.append(f"{indent_str}{branch}{field_name}/{desc_comment}")
 
             if item_type == "object":
-                items_props = items_schema.get("properties", {})
+                items_props = items_schema_non_null.get("properties", {})
                 lines.extend(_build_array_of_objects_example(indent_str, items_props, root_schema))
             else:
                 lines.extend(_build_array_of_primitives_example(indent_str))

@@ -877,7 +877,7 @@ Please fix the issues above and try again. Follow the directory structure instru
 
         # Add streaming marker instruction
         streaming_marker = "<<<STREAM_START>>>"
-        prompt = f"""IMPORTANT: After completing any tool use, begin your final response with the exact marker: {streaming_marker}
+        prompt = f"""IMPORTANT: Begin your response with the exact marker: {streaming_marker}
 
 Then provide your complete response after the marker.
 

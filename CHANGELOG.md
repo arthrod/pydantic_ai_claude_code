@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.13] - 2025-10-17
+
+### Fixed
+- **$ref resolution bug**: Fixed critical bug where JSON schema `$ref` references were not being resolved in `structure_converter.py`
+  - Arrays of nested Pydantic models (e.g., `list[NestedModel]`) were incorrectly treated as arrays of strings
+  - Added `_resolve_schema_ref()` calls in 4 locations to resolve references before checking `type` field
+  - Fixes validation errors: `Input should be a valid dictionary or instance of NestedModel`
+  - Added tests: `test_pydantic_generated_schema_with_ref_references` and `test_build_instructions_with_ref_references`
+
+- **None/null value handling**: Implemented proper distinction between None, empty strings, and missing values
+  - No file created = None/null value
+  - Empty file = empty string ("")
+  - Array gaps (e.g., 0000.txt, 0002.txt with 0001 missing) = None at that index position
+  - Added helper functions: `_is_nullable()`, `_get_non_null_type()`, `_get_non_null_schema()`
+  - Handles `anyOf`/`oneOf` schemas for nullable types (e.g., `str | None`)
+  - Added 4 comprehensive tests for None handling in various scenarios
+
+- **Streaming marker filtering**: Fixed streaming responses to properly filter out tool-use preambles
+  - Changed marker instruction from conditional ("After completing any tool use...") to unconditional
+  - Simple requests without tool use now properly output `<<<STREAM_START>>>` marker
+  - Prevents "prompt.md" and tool-use commentary from appearing in streamed output
+  - Adjusted `MIN_CONTENT_LENGTH` constant from 10 to 5 to allow concise responses
+  - All 5 streaming behavior tests now pass reliably
+
 ## [0.5.12] - 2025-10-17
 
 ### Changed

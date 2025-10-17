@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from pydantic import BaseModel, Field
 
 from pydantic_ai_claude_code.structure_converter import (
     build_structure_instructions,
@@ -642,6 +643,302 @@ def test_required_fields_still_raise_errors():
         # Should raise RuntimeError for missing required array field
         with pytest.raises(RuntimeError, match="Missing directory.*tags"):
             read_structure_from_filesystem(schema, base_path)
+
+
+def test_pydantic_generated_schema_with_ref_references():
+    """Test that Pydantic-generated schemas with $ref references work correctly.
+
+    This is a regression test for the bug where $ref references in array items
+    were not resolved, causing arrays of nested models to be treated as arrays
+    of strings.
+    """
+
+    class NestedModel(BaseModel):
+        """A nested model with multiple fields."""
+        priority: int = Field(description="Priority level (1-10)")
+        action: str = Field(description="Action to take")
+        details: str | None = Field(default=None, description="Optional details")
+
+    class ParentModel(BaseModel):
+        """Parent model containing a list of nested models."""
+        summary: str = Field(description="Summary text")
+        items: list[NestedModel] = Field(description="List of nested items")
+        tags: list[str] = Field(description="Simple string list for comparison")
+
+    # Generate schema using Pydantic (this will contain $ref references)
+    schema = ParentModel.model_json_schema()
+
+    # Verify the schema contains $ref (this is what was causing the bug)
+    assert "$ref" in schema["properties"]["items"]["items"]
+    assert schema["properties"]["items"]["items"]["$ref"] == "#/$defs/NestedModel"
+
+    # Test data
+    original_data = {
+        "summary": "Test summary",
+        "items": [
+            {"priority": 1, "action": "First action", "details": "Some details"},
+            {"priority": 2, "action": "Second action", "details": None},
+        ],
+        "tags": ["tag1", "tag2"],
+    }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_path = Path(tmpdir) / "data"
+
+        # Data → Filesystem
+        write_structure_to_filesystem(original_data, schema, base_path)
+
+        # Verify nested object array structure (not primitive files!)
+        assert (base_path / "items").is_dir()
+        assert (base_path / "items" / "0000").is_dir()  # Should be directory, not .txt file
+        assert (base_path / "items" / "0001").is_dir()  # Should be directory, not .txt file
+        assert not (base_path / "items" / "0000.txt").exists()  # Should NOT be .txt file
+        assert not (base_path / "items" / "0001.txt").exists()  # Should NOT be .txt file
+
+        # Verify nested object fields
+        assert (base_path / "items" / "0000" / "priority.txt").read_text() == "1"
+        assert (base_path / "items" / "0000" / "action.txt").read_text() == "First action"
+        assert (base_path / "items" / "0000" / "details.txt").read_text() == "Some details"
+
+        assert (base_path / "items" / "0001" / "priority.txt").read_text() == "2"
+        assert (base_path / "items" / "0001" / "action.txt").read_text() == "Second action"
+        # details is None for second item, so file shouldn't exist
+        assert not (base_path / "items" / "0001" / "details.txt").exists()
+
+        # Verify primitive array structure (should be .txt files)
+        assert (base_path / "tags" / "0000.txt").read_text() == "tag1"
+        assert (base_path / "tags" / "0001.txt").read_text() == "tag2"
+
+        # Filesystem → Data
+        loaded_data = read_structure_from_filesystem(schema, base_path)
+
+        # Verify data (note: details=None in item[1] is omitted since it's optional)
+        assert len(loaded_data["items"]) == 2
+        assert loaded_data["items"][0]["priority"] == 1
+        assert loaded_data["items"][0]["action"] == "First action"
+        assert loaded_data["items"][0]["details"] == "Some details"
+        assert loaded_data["items"][1]["priority"] == 2
+        assert loaded_data["items"][1]["action"] == "Second action"
+        # details is optional and None, so it's omitted from result
+        assert "details" not in loaded_data["items"][1]
+
+
+def test_build_instructions_with_ref_references():
+    """Test that build_structure_instructions correctly handles $ref references.
+
+    This ensures the instructions tell Claude to create subdirectories for nested
+    objects, not .txt files for primitives.
+    """
+
+    class NestedModel(BaseModel):
+        priority: int = Field(description="Priority level")
+        action: str = Field(description="Action to take")
+
+    class ParentModel(BaseModel):
+        summary: str = Field(description="Summary text")
+        items: list[NestedModel] = Field(description="List of nested items")
+
+    schema = ParentModel.model_json_schema()
+
+    # Verify schema has $ref
+    assert "$ref" in schema["properties"]["items"]["items"]
+
+    # Generate instructions
+    instructions = build_structure_instructions(schema, "/tmp/test")
+
+    # Verify instructions mention subdirectories for nested objects
+    assert "numbered subdirectories" in instructions
+    assert "priority, action" in instructions  # Should list nested fields
+
+    # Verify instructions don't incorrectly say "numbered files (.txt)" for objects
+    # (This was the bug - treating nested objects as primitives)
+    items_section = instructions.split("- items:")[1].split("-")[0]
+    assert "0000.txt" not in items_section  # Should NOT mention .txt files for nested objects
+    assert "0000/" in items_section or "subdirectories" in items_section  # Should mention subdirectories
+
+
+def test_none_vs_empty_string_distinction():
+    """Test that None values and empty strings are handled distinctly.
+
+    This is critical: None = no file, empty string = empty file.
+    """
+    schema = {
+        "properties": {
+            "name": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "description": {"type": "string"},
+            "notes": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        },
+        "required": ["name", "description"],
+    }
+
+    original_data = {
+        "name": "Alice",
+        "description": "",  # Empty string
+        "notes": None,  # None value
+    }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_path = Path(tmpdir) / "data"
+
+        # Data → Filesystem
+        write_structure_to_filesystem(original_data, schema, base_path)
+
+        # Verify: name has content
+        assert (base_path / "name.txt").exists()
+        assert (base_path / "name.txt").read_text() == "Alice"
+
+        # Verify: description is empty file (empty string)
+        assert (base_path / "description.txt").exists()
+        assert (base_path / "description.txt").read_text() == ""
+
+        # Verify: notes has no file (None)
+        assert not (base_path / "notes.txt").exists()
+
+        # Filesystem → Data
+        loaded_data = read_structure_from_filesystem(schema, base_path)
+
+        # Verify distinction is preserved
+        assert loaded_data["name"] == "Alice"
+        assert loaded_data["description"] == ""  # Empty string preserved
+        assert "notes" not in loaded_data  # None means field omitted (optional)
+
+
+def test_none_in_primitive_arrays_creates_gaps():
+    """Test that None values in arrays create gaps in numbering."""
+    schema = {
+        "properties": {
+            "values": {
+                "type": "array",
+                "items": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            },
+        },
+        "required": ["values"],
+    }
+
+    original_data = {
+        "values": ["first", None, "third", None, "fifth"],
+    }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_path = Path(tmpdir) / "data"
+
+        # Data → Filesystem
+        write_structure_to_filesystem(original_data, schema, base_path)
+
+        # Verify gaps in numbering
+        assert (base_path / "values" / "0000.txt").exists()
+        assert not (base_path / "values" / "0001.txt").exists()  # Gap for None
+        assert (base_path / "values" / "0002.txt").exists()
+        assert not (base_path / "values" / "0003.txt").exists()  # Gap for None
+        assert (base_path / "values" / "0004.txt").exists()
+
+        # Verify contents
+        assert (base_path / "values" / "0000.txt").read_text() == "first"
+        assert (base_path / "values" / "0002.txt").read_text() == "third"
+        assert (base_path / "values" / "0004.txt").read_text() == "fifth"
+
+        # Filesystem → Data
+        loaded_data = read_structure_from_filesystem(schema, base_path)
+
+        # Verify None values restored in correct positions
+        assert loaded_data == original_data
+        assert loaded_data["values"][0] == "first"
+        assert loaded_data["values"][1] is None
+        assert loaded_data["values"][2] == "third"
+        assert loaded_data["values"][3] is None
+        assert loaded_data["values"][4] == "fifth"
+
+
+def test_none_in_object_arrays_creates_gaps():
+    """Test that None values in object arrays create gaps in subdirectories."""
+    schema = {
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "anyOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "integer"},
+                                "name": {"type": "string"},
+                            },
+                        },
+                        {"type": "null"},
+                    ]
+                },
+            },
+        },
+        "required": ["items"],
+    }
+
+    original_data = {
+        "items": [
+            {"id": 1, "name": "First"},
+            None,  # Gap
+            {"id": 3, "name": "Third"},
+            None,  # Gap
+            {"id": 5, "name": "Fifth"},
+        ],
+    }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_path = Path(tmpdir) / "data"
+
+        # Data → Filesystem
+        write_structure_to_filesystem(original_data, schema, base_path)
+
+        # Verify gaps in subdirectory numbering
+        assert (base_path / "items" / "0000").is_dir()
+        assert not (base_path / "items" / "0001").exists()  # Gap for None
+        assert (base_path / "items" / "0002").is_dir()
+        assert not (base_path / "items" / "0003").exists()  # Gap for None
+        assert (base_path / "items" / "0004").is_dir()
+
+        # Verify contents of existing subdirectories
+        assert (base_path / "items" / "0000" / "id.txt").read_text() == "1"
+        assert (base_path / "items" / "0000" / "name.txt").read_text() == "First"
+        assert (base_path / "items" / "0002" / "id.txt").read_text() == "3"
+        assert (base_path / "items" / "0004" / "name.txt").read_text() == "Fifth"
+
+        # Filesystem → Data
+        loaded_data = read_structure_from_filesystem(schema, base_path)
+
+        # Verify None values restored in correct positions
+        assert loaded_data == original_data
+        assert loaded_data["items"][0] == {"id": 1, "name": "First"}
+        assert loaded_data["items"][1] is None
+        assert loaded_data["items"][2] == {"id": 3, "name": "Third"}
+        assert loaded_data["items"][3] is None
+        assert loaded_data["items"][4] == {"id": 5, "name": "Fifth"}
+
+
+def test_required_nullable_field_missing_returns_none():
+    """Test that required nullable fields missing from filesystem return None."""
+    schema = {
+        "properties": {
+            "name": {"type": "string"},
+            "middle_name": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        },
+        "required": ["name", "middle_name"],  # Both required!
+    }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_path = Path(tmpdir) / "data"
+        base_path.mkdir(parents=True, exist_ok=True)
+
+        # Create only name, not middle_name
+        (base_path / "name.txt").write_text("Alice")
+        # middle_name.txt does NOT exist
+
+        # Filesystem → Data
+        loaded_data = read_structure_from_filesystem(schema, base_path)
+
+        # middle_name is required AND nullable, so missing file = None
+        assert loaded_data == {
+            "name": "Alice",
+            "middle_name": None,
+        }
 
 
 if __name__ == "__main__":
