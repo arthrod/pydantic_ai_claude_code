@@ -6,68 +6,9 @@ import re
 import uuid
 from typing import Any
 
-from pydantic_ai import ToolDefinition
 from pydantic_ai.messages import ToolCallPart
 
 logger = logging.getLogger(__name__)
-
-
-def format_tools_for_prompt(tools: list[ToolDefinition]) -> str:
-    """Format tool definitions for inclusion in system prompt.
-
-    Args:
-        tools: List of tool definitions
-
-    Returns:
-        Formatted string describing tools for Claude
-    """
-    if not tools:
-        logger.debug("No tools to format for prompt")
-        return ""
-
-    logger.info("=" * 80)
-    logger.info("FORMATTING TOOLS FOR PROMPT - Total tools: %d", len(tools))
-    logger.info("=" * 80)
-
-    # Build simple natural descriptions
-    func_descriptions = []
-    for tool in tools:
-        logger.info("Tool: %s", tool.name)
-        logger.info("  Description: %s", tool.description)
-        logger.info("  Schema: %s", json.dumps(tool.parameters_json_schema, indent=2))
-
-        params = tool.parameters_json_schema.get("properties", {})
-        param_list = ", ".join(params.keys())
-        func_descriptions.append(
-            f"- {tool.name}({param_list}): {tool.description or 'No description'}"
-        )
-
-    tools_prompt = f"""
-IMPORTANT PROTOCOL - Read carefully:
-
-If you need data from external functions:
-1. First turn: Output ONLY "EXECUTE: function_name(params)" - nothing else
-2. You'll receive "Tool Result (function_name): <data>"
-3. Second turn: Answer the user's question using that data - DO NOT call EXECUTE again
-
-Example:
-Request: What's 5 + 3?
-You: EXECUTE: add(a=5, b=3)
-Tool Result (add): 8
-You: The answer is 8.
-
-Available functions:
-{chr(10).join(func_descriptions)}
-
-CRITICAL: If you see "Tool Result" in the conversation, that means you already called the function. Use that result to answer - DO NOT output EXECUTE again!
-"""
-    logger.info("=" * 80)
-    logger.info("GENERATED TOOLS PROMPT:")
-    logger.info("=" * 80)
-    logger.info("%s", tools_prompt)
-    logger.info("=" * 80)
-
-    return tools_prompt
 
 
 def _parse_value_from_string(value_str: str, param_name: str) -> Any:

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.12] - 2025-10-17
+
+### Changed
+- **Prompt restructuring**: Restructured all prompt construction functions with comprehensive markdown formatting for improved cognitive processing
+  - `_build_function_tools_prompt`: Added headers, numbered steps, code blocks, and emphasis for function selection task
+  - `build_structure_instructions`: Added markdown sections, examples, and clear hierarchy for file/folder organization
+  - `_build_unstructured_output_instruction`: Added structured sections with requirements and emphasis
+  - Improved scannability and comprehension with consistent markdown formatting
+
+### Removed
+- **Unused legacy code**: Deleted `format_tools_for_prompt` function from `tools.py`
+  - Function implemented incorrect EXECUTE protocol that doesn't match actual control flow
+  - Actual flow uses CHOICE format in `_build_function_tools_prompt`
+  - Removed 80+ lines of unused code
+  - Removed associated test functions
+
+### Fixed
+- **Message formatting consistency**: Updated role labels across codebase
+  - Changed "Context:" to "Additional Information (from {function_name}):" for function return values
+  - More descriptive labeling that clarifies purpose vs technical implementation
+  - Updated tests to match new role labels
+
 ## [0.5.11] - 2025-10-16
 
 ## [0.5.10] - 2025-10-16

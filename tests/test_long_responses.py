@@ -231,6 +231,7 @@ class TestJSONAssembly:
                     "name": {"type": "string"},
                     "age": {"type": "integer"},  # Missing!
                 },
+                "required": ["name", "age"],  # Both are required
             }
 
             # Should raise RuntimeError
@@ -250,6 +251,7 @@ class TestJSONAssembly:
             schema = {
                 "type": "object",
                 "properties": {"items": {"type": "array"}},
+                "required": ["items"],  # items is required
             }
 
             # Should raise RuntimeError
@@ -523,9 +525,9 @@ class TestJSONAssembly:
         assert "0000.txt, 0001.txt" in instruction
         # Completion marker removed as unnecessary (CLI execution is synchronous)
         assert ".complete" not in instruction
-        assert "Task: Organize your response" in instruction
-        assert "Information to provide:" in instruction
-        assert "Required information:" in instruction
+        assert "# Task: Organize Information into File Structure" in instruction
+        assert "## Information to Provide" in instruction
+        assert "## Required Information" in instruction
 
     def test_unstructured_output_instruction_format(self):
         """Test that unstructured output instruction uses Write tool."""
@@ -542,6 +544,7 @@ class TestJSONAssembly:
         assert "/tmp/claude_unstructured_output_" in instruction
         assert "complete response" in instruction
         assert "ONLY your direct answer" in instruction
+        assert "# Output Instructions" in instruction
 
 
 class TestValidationErrors:

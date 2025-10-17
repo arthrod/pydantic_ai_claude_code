@@ -49,7 +49,7 @@ def format_messages_for_claude(
                     parts.append(f"Request: {req_part.content}")
                 elif isinstance(req_part, ToolReturnPart):
                     # Format tool returns as plain contextual data (no mention of tools/functions)
-                    parts.append(f"Context: {req_part.content}")
+                    parts.append(f"Additional Information (from {req_part.tool_name}): {req_part.content}")
 
         elif isinstance(message, ModelResponse):
             for resp_part in message.parts:

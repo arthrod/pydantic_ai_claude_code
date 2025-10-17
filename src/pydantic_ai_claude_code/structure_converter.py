@@ -168,13 +168,28 @@ def read_structure_from_filesystem(
         )
 
     properties = schema.get("properties", {})
+    required_fields = schema.get("required", [])
     result: dict[str, Any] = {}
 
     for field_name, field_schema in properties.items():
         # Resolve $ref if present
         field_schema = _resolve_schema_ref(field_schema, root_schema)
         field_type = field_schema.get("type", "string")
+        is_required = field_name in required_fields
 
+        # Check if path exists for this field
+        if field_type == "array":
+            field_path = base_path / field_name
+        elif field_type == "object":
+            field_path = base_path / field_name
+        else:
+            field_path = base_path / f"{field_name}.txt"
+
+        # Skip optional fields that don't exist on filesystem
+        if not field_path.exists() and not is_required:
+            continue
+
+        # Read the field (will raise error if required but missing)
         if field_type == "array":
             result[field_name] = _read_array_field(field_name, field_schema, base_path, root_schema)
         elif field_type == "object":
@@ -382,42 +397,89 @@ def build_structure_instructions(schema: dict[str, Any], temp_dir: str) -> str:
     # Build example structure
     example_structure = _build_example_structure(properties, schema)
 
-    instructions = f"""Task: Organize your response into separate files and directories.
+    instructions = f"""# Task: Organize Information into File Structure
 
-IMPORTANT: Create files and directories exactly as described. Do not write any structured text formats.
+## Working Directory
 
-Working directory:
+```bash
 mkdir -p {temp_dir}
+```
 
-How to organize information:
+---
 
-1. Text values: Write to a .txt file
-   Example: name.txt contains "Alice"
+## How to Organize Information
 
-2. Numbers: Write to a .txt file (just the number)
-   Example: age.txt contains "25"
-   Example: score.txt contains "98.5"
+### 1. Text Values
+Write to a `.txt` file containing the text content.
 
-3. True/false values: Write to a .txt file (just "true" or "false")
-   Example: active.txt contains "true"
+**Example:**
+```
+name.txt contains "Alice"
+```
 
-4. Ordered items: Create a subfolder, then numbered files for values or subdirectories for items
-   Example for values: tags/0000.txt, tags/0001.txt, tags/0002.txt
-   Example for items: chapters/0000/, chapters/0001/ (CANNOT BE EMPTY, must contain files for values or subfolders for items)
+### 2. Numbers
+Write to a `.txt` file containing just the number.
 
-5. Labelled items: Create a subfolder, then create appropriately named files for values or subfolders for items
-   Example for values: author/first_name.txt, author/last_name.txt
-   Example for items: author/profile/, author/bibliography/ (CANNOT BE EMPTY, must contain files for values or subfolders for items)
+**Examples:**
+```
+age.txt contains "25"
+score.txt contains "98.5"
+```
 
-Information to provide:
+### 3. True/False Values
+Write to a `.txt` file containing just `"true"` or `"false"`.
+
+**Example:**
+```
+active.txt contains "true"
+```
+
+### 4. Ordered Items
+Create a subfolder, then numbered files for values **OR** numbered subdirectories for items.
+
+**Examples:**
+- **For values:** `tags/0000.txt`, `tags/0001.txt`, `tags/0002.txt`
+- **For items:** `chapters/0000/`, `chapters/0001/` (each directory contains its own files/subfolders)
+
+> **IMPORTANT:** Subfolders for **ordered** items can be empty if there are no values or items to include.
+
+### 5. Labelled Items
+Create a subfolder, then create appropriately named files for values **OR** subfolders for items.
+
+**Examples:**
+- **For values:** `author/first_name.txt`, `author/last_name.txt`
+- **For items:** `author/profile/`, `author/bibliography/` (each contains its own structure according to ordered items or labelled items)
+
+> **IMPORTANT:** Subfolders for **labelled** items **CANNOT BE EMPTY** - each must contain files for values or subfolders for items.
+
+---
+
+## Information to Provide
+
 {chr(10).join(field_descriptions)}
 
-Example structure:
+---
+
+## Example Structure
+
+```
 {example_structure}
+```
 
-Required information: {", ".join(required_fields) if required_fields else "all listed above"}
+---
 
-CRITICAL: After reading the request below, you MUST create the complete file/folder structure with ALL required information populated from the request. Extract all necessary values, names, and data from the request text to fill in the structure completely. Do not leave any required folders empty or files missing."""
+## Required Information
+
+{", ".join(required_fields) if required_fields else "All fields listed above"}
+
+---
+
+> **CRITICAL:**
+> - Read the request below carefully
+> - Extract **ALL** necessary values, names, and data from the request text
+> - Create the **COMPLETE** file/folder structure with ALL required information
+> - Do **NOT** leave any subfolders for labelled items empty or files missing
+> - Do **NOT** write any structured text formats (like JSON, YAML, etc.) - use the file/folder structure only"""
 
     return instructions
 

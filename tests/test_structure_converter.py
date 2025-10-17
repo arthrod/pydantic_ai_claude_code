@@ -524,5 +524,125 @@ def test_empty_arrays():
         assert loaded_data["scores"] == []
 
 
+def test_optional_fields_missing_from_filesystem():
+    """Test that optional fields missing from filesystem don't cause errors.
+
+    This tests the fix for the bug where optional array/object fields
+    that don't exist on the filesystem would cause RuntimeError even though
+    they weren't in the schema's 'required' list.
+    """
+    schema = {
+        "properties": {
+            "needs_research": {"type": "boolean", "description": "Whether research is needed"},
+            "queries": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional search queries",
+            },
+            "rationale": {"type": "string", "description": "Explanation"},
+            "metadata": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string"},
+                    "confidence": {"type": "number"},
+                },
+                "description": "Optional metadata",
+            },
+            "score": {"type": "number", "description": "Optional score"},
+        },
+        "required": ["needs_research", "rationale"],
+    }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_path = Path(tmpdir) / "data"
+        base_path.mkdir(parents=True, exist_ok=True)
+
+        # Create filesystem with only required fields
+        # (simulating Claude not creating optional fields)
+        (base_path / "needs_research.txt").write_text("false")
+        (base_path / "rationale.txt").write_text("This is basic math, no research needed")
+
+        # Filesystem → Data (should NOT raise error for missing optional fields)
+        loaded_data = read_structure_from_filesystem(schema, base_path)
+
+        # Verify only required fields are present
+        assert loaded_data == {
+            "needs_research": False,
+            "rationale": "This is basic math, no research needed",
+        }
+        # Optional fields should not be in the result dict
+        assert "queries" not in loaded_data
+        assert "metadata" not in loaded_data
+        assert "score" not in loaded_data
+
+
+def test_optional_fields_partially_present():
+    """Test that some optional fields can be present while others are missing."""
+    schema = {
+        "properties": {
+            "name": {"type": "string"},
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "metadata": {
+                "type": "object",
+                "properties": {
+                    "version": {"type": "integer"},
+                },
+            },
+            "score": {"type": "number"},
+        },
+        "required": ["name"],
+    }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_path = Path(tmpdir) / "data"
+        base_path.mkdir(parents=True, exist_ok=True)
+
+        # Create filesystem with required field + some optional fields
+        (base_path / "name.txt").write_text("Test")
+        (base_path / "tags").mkdir()
+        (base_path / "tags" / "0000.txt").write_text("tag1")
+        (base_path / "tags" / "0001.txt").write_text("tag2")
+        # metadata and score are missing
+
+        # Filesystem → Data
+        loaded_data = read_structure_from_filesystem(schema, base_path)
+
+        # Verify partial optional fields
+        assert loaded_data == {
+            "name": "Test",
+            "tags": ["tag1", "tag2"],
+        }
+        assert "metadata" not in loaded_data
+        assert "score" not in loaded_data
+
+
+def test_required_fields_still_raise_errors():
+    """Test that missing required fields still raise errors as expected."""
+    schema = {
+        "properties": {
+            "name": {"type": "string"},
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        },
+        "required": ["name", "tags"],
+    }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_path = Path(tmpdir) / "data"
+        base_path.mkdir(parents=True, exist_ok=True)
+
+        # Only create name, not tags (which is required)
+        (base_path / "name.txt").write_text("Test")
+
+        # Should raise RuntimeError for missing required array field
+        with pytest.raises(RuntimeError, match="Missing directory.*tags"):
+            read_structure_from_filesystem(schema, base_path)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

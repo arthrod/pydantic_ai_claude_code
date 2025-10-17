@@ -1,11 +1,10 @@
 """Tests for tool calling functionality."""
 
 import pytest
-from pydantic_ai import Agent, RunContext, ToolDefinition
+from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import ToolCallPart
 
 from pydantic_ai_claude_code.tools import (
-    format_tools_for_prompt,
     is_tool_call_response,
     parse_tool_calls,
 )
@@ -13,58 +12,6 @@ from pydantic_ai_claude_code.tools import (
 # Test constants
 EXPECTED_MULTIPLE_TOOL_CALLS = 2  # Expected number of tool calls in multi-call test
 ARCHIVED_CUSTOMER_ID = 12345  # Test customer ID for error handling
-
-
-def test_format_tools_for_prompt_empty():
-    """Test formatting with no tools."""
-    result = format_tools_for_prompt([])
-    assert result == ""
-
-
-def test_format_tools_for_prompt_single_tool():
-    """Test formatting a single tool."""
-    tool = ToolDefinition(
-        name="get_weather",
-        description="Get weather for a city",
-        parameters_json_schema={
-            "type": "object",
-            "properties": {
-                "city": {"type": "string"},
-                "units": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-            },
-            "required": ["city"],
-        },
-    )
-
-    result = format_tools_for_prompt([tool])
-
-    assert "get_weather" in result
-    assert "Get weather for a city" in result
-    assert "city" in result
-    assert "EXECUTE" in result
-
-
-def test_format_tools_for_prompt_multiple_tools():
-    """Test formatting multiple tools."""
-    tools = [
-        ToolDefinition(
-            name="tool1",
-            description="First tool",
-            parameters_json_schema={"type": "object", "properties": {}},
-        ),
-        ToolDefinition(
-            name="tool2",
-            description="Second tool",
-            parameters_json_schema={"type": "object", "properties": {}},
-        ),
-    ]
-
-    result = format_tools_for_prompt(tools)
-
-    assert "tool1" in result
-    assert "tool2" in result
-    assert "First tool" in result
-    assert "Second tool" in result
 
 
 def test_parse_tool_calls_valid_single():

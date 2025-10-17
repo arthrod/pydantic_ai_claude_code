@@ -91,7 +91,7 @@ def test_format_tool_return():
 
     formatted = format_messages_for_claude(messages)
 
-    assert "Context: 4" in formatted
+    assert "Additional Information (from calculator): 4" in formatted
 
 
 def test_build_conversation_context_empty():

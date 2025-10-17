@@ -98,11 +98,28 @@ class ClaudeCodeModel(Model):
 
         logger.debug("Unstructured output file path: %s", output_filename)
 
-        instruction = f"""IMPORTANT: Write your answer to: {output_filename}
+        instruction = f"""# Output Instructions
 
-Use the Write tool to create the file with your complete response.
+## File Path
 
-The file must contain ONLY your direct answer - no preambles, no meta-commentary, just the answer itself."""
+```
+{output_filename}
+```
+
+---
+
+## Requirements
+
+1. **Use the Write tool** to create the file with your complete response
+2. **Content rules:**
+   - Include ONLY your direct answer
+   - No preambles or introductions
+   - No meta-commentary about what you're doing
+   - Just the answer itself
+
+---
+
+> **IMPORTANT:** All output must go to the file path specified above."""
 
         return instruction
 
@@ -185,25 +202,54 @@ The file must contain ONLY your direct answer - no preambles, no meta-commentary
             f"{len(function_tools) + 1}. none - Answer directly without calling any function"
         )
 
-        prompt = f"""TASK: Select which function(s) you need to answer the user's request.
+        prompt = f"""# Function Selection Task
 
-This is NOT asking you to execute these functions - you are only SELECTING which one(s) would be helpful.
+## Your Role
 
-Available function options:
+You are **SELECTING** which function(s) to use - NOT executing them.
+
+---
+
+## Available Functions
+
 {chr(10).join(option_descriptions)}
 
-Instructions:
-1. Read the user's request carefully
-2. Decide if you need to call function(s) (options 1-{len(function_tools)}) or can answer directly (option {len(function_tools) + 1})
-3. Respond with EXACTLY this format:
-   - For single function: CHOICE: function_name
-   - For multiple functions: One CHOICE per line:
-     CHOICE: function_name1
-     CHOICE: function_name2
-   - Do NOT include explanations or reasoning
-   - Example: "CHOICE: {function_tools[0].name if function_tools else "none"}" or "CHOICE: none"
+---
 
-DO NOT try to execute these functions yourself - they are not built-in tools available to you. You are only SELECTING which function(s) to use."""
+## Instructions
+
+### Step 1: Analyze the Request
+Read the user's request carefully to understand what information or action is needed.
+
+### Step 2: Make Your Decision
+Determine if you need to call function(s) (options 1-{len(function_tools)}) or can answer directly (option {len(function_tools) + 1}).
+
+### Step 3: Respond with Exact Format
+
+#### Single Function
+```
+CHOICE: function_name
+```
+
+#### Multiple Functions
+```
+CHOICE: function_name1
+CHOICE: function_name2
+```
+
+#### No Function Needed
+```
+CHOICE: none
+```
+
+**Example:** `CHOICE: {function_tools[0].name if function_tools else "none"}`
+
+---
+
+> **CRITICAL:**
+> - Do NOT include explanations or reasoning
+> - Do NOT try to execute these functions - they are not built-in tools
+> - You are ONLY making a selection"""
 
         available_functions = {tool.name: tool for tool in function_tools}
         return prompt, available_functions
