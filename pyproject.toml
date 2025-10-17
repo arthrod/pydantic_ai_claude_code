@@ -1,6 +1,6 @@
 [project]
 name = "pydantic-ai-claude-code"
-version = "0.5.12"
+version = "0.5.13"
 description = "Use local Claude Code CLI as a Pydantic AI model provider with full support for structured responses, tools, and streaming"
 readme = "README.md"
 authors = [
