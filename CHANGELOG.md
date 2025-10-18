@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.14] - 2025-10-18
+
 ### Fixed
 - **Type safety improvements**: Resolved all mypy type errors for strict type checking
   - Added proper type casts in `structure_converter.py` for dictionary value access
