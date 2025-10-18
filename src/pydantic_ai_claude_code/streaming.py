@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
+from typing import cast
 
 from .types import ClaudeStreamEvent
 
@@ -91,7 +92,7 @@ def _extract_from_content_block_delta(event: ClaudeStreamEvent) -> str | None:
         text = delta.get("text", "")
         if text:
             logger.debug("Extracted text delta: %d chars", len(text))
-            return text
+            return cast(str, text)
     return None
 
 

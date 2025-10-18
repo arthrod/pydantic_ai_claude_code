@@ -568,6 +568,42 @@ Please fix the issues above and try again. Follow the directory structure instru
 
         return None, arg_settings, schema, arg_prompt
 
+    def _log_argument_collection_attempt(
+        self, attempt: int, max_retries: int, prompt: str, is_retry: bool
+    ) -> None:
+        """Log argument collection attempt details."""
+        if is_retry:
+            logger.info(
+                "Retrying argument collection (attempt %d/%d) after validation error",
+                attempt + 1,
+                max_retries + 1,
+            )
+            logger.info("=" * 80)
+            logger.info("RETRY PROMPT - length: %d", len(prompt))
+        else:
+            logger.info("=" * 80)
+            logger.info("PHASE 2: ARGUMENT COLLECTION - Prompt length: %d", len(prompt))
+        logger.info("=" * 80)
+        logger.info("%s", prompt)
+        logger.info("=" * 80)
+
+    def _log_argument_collection_result(
+        self, model_response: ModelResponse | None, error_msg: str | None
+    ) -> None:
+        """Log argument collection result."""
+        logger.info("=" * 80)
+        logger.info("PHASE 2: ARGUMENT COLLECTION RESULT")
+        logger.info("=" * 80)
+        if model_response and model_response.parts:
+            first_part = model_response.parts[0]
+            if isinstance(first_part, ToolCallPart):
+                logger.info("Success! Extracted args: %s", first_part.args)
+            else:
+                logger.info("Success! Part type: %s", type(first_part).__name__)
+        if error_msg:
+            logger.info("Error: %s", error_msg)
+        logger.info("=" * 80)
+
     async def _handle_argument_collection(
         self,
         messages: list[ModelMessage],
@@ -600,26 +636,13 @@ Please fix the issues above and try again. Follow the directory structure instru
 
         for attempt in range(max_retries + 1):
             if attempt == 0:
-                logger.info("=" * 80)
-                logger.info("PHASE 2: ARGUMENT COLLECTION - Prompt length: %d", len(arg_prompt))
-                logger.info("=" * 80)
-                logger.info("%s", arg_prompt)
-                logger.info("=" * 80)
                 current_prompt = arg_prompt
+                self._log_argument_collection_attempt(attempt, max_retries, current_prompt, False)
             else:
-                logger.info(
-                    "Retrying argument collection (attempt %d/%d) after validation error",
-                    attempt + 1,
-                    max_retries + 1,
-                )
                 current_prompt = self._build_retry_prompt(
-                    messages, schema, arg_settings, error_msg
+                    messages, schema, arg_settings, error_msg or ""
                 )
-                logger.info("=" * 80)
-                logger.info("RETRY PROMPT - length: %d", len(current_prompt))
-                logger.info("=" * 80)
-                logger.info("%s", current_prompt)
-                logger.info("=" * 80)
+                self._log_argument_collection_attempt(attempt, max_retries, current_prompt, True)
 
             model_response, error_msg, arg_response = await self._try_collect_arguments(
                 current_prompt,
@@ -629,14 +652,7 @@ Please fix the issues above and try again. Follow the directory structure instru
             )
 
             if model_response or error_msg:
-                logger.info("=" * 80)
-                logger.info("PHASE 2: ARGUMENT COLLECTION RESULT")
-                logger.info("=" * 80)
-                if model_response:
-                    logger.info("Success! Extracted args: %s", model_response.parts[0].args if model_response.parts else "N/A")
-                if error_msg:
-                    logger.info("Error: %s", error_msg)
-                logger.info("=" * 80)
+                self._log_argument_collection_result(model_response, error_msg)
 
             if model_response:
                 return model_response
@@ -672,6 +688,23 @@ Please fix the issues above and try again. Follow the directory structure instru
             arg_response,
             [TextPart(content=error_msg)],
         )
+
+    async def _run_and_log_claude_request(
+        self, prompt: str, settings: ClaudeCodeSettings
+    ) -> ClaudeJSONResponse:
+        """Run Claude CLI with full logging."""
+        logger.info("=" * 80)
+        logger.info("FULL PROMPT BEING SENT TO CLAUDE:")
+        logger.info("=" * 80)
+        logger.info("%s", prompt)
+        logger.info("=" * 80)
+        response = await run_claude_async(prompt, settings=settings)
+        logger.info("=" * 80)
+        logger.info("CLAUDE RESPONSE:")
+        logger.info("=" * 80)
+        logger.info("%s", json.dumps(response, indent=2))
+        logger.info("=" * 80)
+        return response
 
     def _build_argument_collection_instruction(
         self, schema: dict[str, Any], settings: ClaudeCodeSettings
@@ -730,7 +763,7 @@ Please fix the issues above and try again. Follow the directory structure instru
         settings = self.provider.get_settings(model=self._model_name)
         if model_settings:
             # Merge model_settings into provider settings (model_settings takes precedence)
-            settings.update(model_settings)
+            settings.update(model_settings)  # type: ignore[typeddict-item]
         output_tools = (
             model_request_parameters.output_tools if model_request_parameters else []
         )
@@ -754,17 +787,7 @@ Please fix the issues above and try again. Follow the directory structure instru
         )
 
         # Run Claude CLI and convert response
-        logger.info("=" * 80)
-        logger.info("FULL PROMPT BEING SENT TO CLAUDE:")
-        logger.info("=" * 80)
-        logger.info("%s", prompt)
-        logger.info("=" * 80)
-        response = await run_claude_async(prompt, settings=settings)
-        logger.info("=" * 80)
-        logger.info("CLAUDE RESPONSE:")
-        logger.info("=" * 80)
-        logger.info("%s", json.dumps(response, indent=2))
-        logger.info("=" * 80)
+        response = await self._run_and_log_claude_request(prompt, settings)
         result = self._convert_response(
             response,
             output_tools=output_tools,
@@ -810,7 +833,7 @@ Please fix the issues above and try again. Follow the directory structure instru
         messages: list[ModelMessage],
         model_settings: ModelSettings | None,
         model_request_parameters: ModelRequestParameters,
-        _run_context: Any | None = None,
+        run_context: Any | None = None,
     ) -> AsyncIterator[StreamedResponse]:
         """Make a streaming request to Claude Code CLI.
 
@@ -838,7 +861,7 @@ Please fix the issues above and try again. Follow the directory structure instru
         settings = self.provider.get_settings(model=self._model_name)
         if model_settings:
             # Merge model_settings into provider settings (model_settings takes precedence)
-            settings.update(model_settings)
+            settings.update(model_settings)  # type: ignore[typeddict-item]
         output_tools = (
             model_request_parameters.output_tools if model_request_parameters else []
         )
@@ -882,18 +905,12 @@ Please fix the issues above and try again. Follow the directory structure instru
 Then provide your complete response after the marker.
 
 {prompt}"""
-        settings["__streaming_marker__"] = streaming_marker
+        settings["__streaming_marker__"] = streaming_marker  # type: ignore[typeddict-unknown-key]
 
-        # Setup working directory for streaming
-        import tempfile
+        # Setup working directory for streaming (using shared helper)
+        from .utils import _setup_working_directory_and_prompt
 
-        cwd = settings.get("working_directory")
-        if not cwd:
-            cwd = tempfile.mkdtemp(prefix="claude_prompt_")
-
-        Path(cwd).mkdir(parents=True, exist_ok=True)
-        prompt_file = Path(cwd) / "prompt.md"
-        prompt_file.write_text(prompt)
+        cwd = _setup_working_directory_and_prompt(prompt, settings)
 
         # Build command and create event stream
         cmd = build_claude_command(settings=settings, output_format="stream-json")

@@ -1547,7 +1547,7 @@ wheels = [
 
 [[package]]
 name = "pydantic-ai-claude-code"
-version = "0.5.12"
+version = "0.5.13"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },

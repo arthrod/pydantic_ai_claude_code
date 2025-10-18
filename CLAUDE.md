@@ -200,12 +200,14 @@ uv run python examples/long_response_example.py
 
 **Prompt File Strategy**: All prompts are passed to Claude CLI via files rather than command-line arguments:
 1. Each execution creates or uses a working directory (temp directory if none specified)
-2. Prompts are written to `prompt.md` in the working directory
-3. Claude CLI is invoked with the command: `Follow the instructions in prompt.md`
-4. This approach ensures consistent handling of prompts regardless of length or special characters
-5. System prompts (including JSON schemas for structured output and function tools) are also written to `prompt.md` to avoid argument list size limits (~128KB)
-6. User-specified `append_system_prompt` settings are included in the prompt file to avoid duplication
-7. Temp directories are created with prefix `claude_prompt_*` in `/tmp/`
+2. For user-specified working directories, each CLI call gets a numbered subdirectory (`1/`, `2/`, `3/`, etc.) to prevent overwrites during multi-phase operations (e.g., tool selection + argument collection)
+3. Prompts are written to `prompt.md` in the working directory (or subdirectory)
+4. Claude CLI is invoked with the command: `Follow the instructions in prompt.md`
+5. This approach ensures consistent handling of prompts regardless of length or special characters
+6. System prompts (including JSON schemas for structured output and function tools) are also written to `prompt.md` to avoid argument list size limits (~128KB)
+7. User-specified `append_system_prompt` settings are included in the prompt file to avoid duplication
+8. Temp directories are created with prefix `claude_prompt_*` in `/tmp/`
+9. Raw responses are automatically saved to `response.json` alongside `prompt.md` for complete request/response pairs
 
 **Output File Strategy**: Only structured outputs require file writing:
 - **Unstructured output**: Captured directly from CLI stdout (no file needed - simpler and more reliable)

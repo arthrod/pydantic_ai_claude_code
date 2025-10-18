@@ -941,5 +941,135 @@ def test_required_nullable_field_missing_returns_none():
         }
 
 
+def test_nested_list_fields_in_array_of_objects_example():
+    """Regression test for bug: list[str] fields in nested objects shown as .txt files.
+
+    This was a critical bug where _build_array_of_objects_example() blindly appended
+    .txt to all nested fields without checking their type. This caused non-deterministic
+    Claude behavior and production failures.
+
+    Bug report: https://github.com/anthropics/pydantic-ai-claude-code/issues/XXX
+    """
+
+    class NestedWithList(BaseModel):
+        """Object with a list[str] field."""
+        name: str = Field(description="Name field")
+        tags: list[str] = Field(description="List of tags")
+
+    class Container(BaseModel):
+        """Container with array of objects that have list[str] fields."""
+        items: list[NestedWithList] = Field(description="Items")
+
+    # Generate instructions using Pydantic schema (which includes $ref)
+    schema = Container.model_json_schema()
+    instructions = build_structure_instructions(schema, "/tmp/test")
+
+    # CRITICAL: tags should be shown as a directory with numbered files, NOT as .txt file
+    assert "tags/" in instructions, "tags should be shown as a directory"
+    assert "0000.txt" in instructions, "tags should contain numbered .txt files"
+
+    # BUG: If this assertion fails, the bug has regressed
+    assert "tags.txt" not in instructions, (
+        "BUG REGRESSION: tags shown as .txt file instead of directory! "
+        "This causes ambiguous instructions and production failures."
+    )
+
+    # Verify the example structure shows correct format
+    lines = instructions.split('\n')
+    in_example = False
+    found_tags_dir = False
+    found_tags_file = False
+
+    for line in lines:
+        if '## Example Structure' in line:
+            in_example = True
+        if in_example:
+            if 'tags/' in line and '#' in line:
+                found_tags_dir = True
+            if 'tags.txt' in line and '#' in line:
+                found_tags_file = True
+
+    assert found_tags_dir, "Example should show 'tags/' as directory"
+    assert not found_tags_file, (
+        "BUG REGRESSION: Example shows 'tags.txt' instead of 'tags/' directory!"
+    )
+
+
+def test_nested_object_fields_in_array_of_objects_example():
+    """Regression test: nested object fields should be shown as directories, not .txt files."""
+
+    class Inner(BaseModel):
+        title: str = Field(description="Title")
+        count: int = Field(description="Count")
+
+    class Middle(BaseModel):
+        name: str = Field(description="Name")
+        inner: Inner = Field(description="Inner object")
+
+    class Outer(BaseModel):
+        items: list[Middle] = Field(description="Items")
+
+    schema = Outer.model_json_schema()
+    instructions = build_structure_instructions(schema, "/tmp/test")
+
+    # inner should be shown as a directory, NOT as inner.txt
+    assert "inner/" in instructions, "nested object should be shown as directory"
+    assert "inner.txt" not in instructions, (
+        "BUG REGRESSION: nested object shown as .txt file instead of directory!"
+    )
+
+
+def test_production_model_structure_example():
+    """Regression test for the actual production model that failed.
+
+    The production model had ImprovementPlan with list[ImprovementRecommendation],
+    where ImprovementRecommendation contained criteria_addressed: list[str].
+
+    This caused the error:
+    "Missing directory: /tmp/claude_data_structure_98e67077/recommendations/0002/criteria_addressed"
+    """
+
+    class ImprovementRecommendation(BaseModel):
+        priority: int = Field(description="Priority level")
+        criteria_addressed: list[str] = Field(description="List of criteria addressed")
+        current_weakness: str = Field(description="Current weakness")
+        specific_action: str = Field(description="Specific action to take")
+        suggested_text: str | None = Field(description="Suggested text")
+
+    class ImprovementPlan(BaseModel):
+        recommendations: list[ImprovementRecommendation] = Field(description="List of recommendations")
+
+    schema = ImprovementPlan.model_json_schema()
+    instructions = build_structure_instructions(schema, "/tmp/test")
+
+    # CRITICAL: criteria_addressed must be shown as a directory
+    assert "criteria_addressed/" in instructions, (
+        "criteria_addressed should be shown as directory"
+    )
+
+    # BUG: This was the actual bug that caused production failures
+    assert "criteria_addressed.txt" not in instructions, (
+        "BUG REGRESSION: criteria_addressed shown as .txt file! "
+        "This caused production error: 'Missing directory: .../criteria_addressed'"
+    )
+
+    # Verify example structure shows numbered files under criteria_addressed/
+    lines = instructions.split('\n')
+    found_criteria_dir = False
+    found_numbered_files = False
+
+    for i, line in enumerate(lines):
+        if 'criteria_addressed/' in line and '#' in line:
+            found_criteria_dir = True
+            # Check next few lines for numbered files
+            for j in range(i+1, min(i+4, len(lines))):
+                if '0000.txt' in lines[j]:
+                    found_numbered_files = True
+                    break
+
+    assert found_criteria_dir, "Example should show 'criteria_addressed/' directory"
+    assert found_numbered_files, "Example should show numbered files under criteria_addressed/"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

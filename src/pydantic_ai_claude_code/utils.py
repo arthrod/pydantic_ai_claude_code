@@ -41,7 +41,7 @@ def resolve_claude_cli_path(settings: ClaudeCodeSettings | None = None) -> str:
     """
     # Priority 1: Settings
     if settings and settings.get("claude_cli_path"):
-        cli_path = settings["claude_cli_path"]
+        cli_path = cast(str, settings["claude_cli_path"])
         logger.debug("Using claude CLI from settings: %s", cli_path)
         return cli_path
 
@@ -257,6 +257,64 @@ def build_claude_command(
     return cmd
 
 
+def _get_next_call_subdirectory(base_dir: str) -> Path:
+    """Get next numbered subdirectory for this CLI call to avoid overwrites.
+
+    Args:
+        base_dir: Base working directory
+
+    Returns:
+        Path to numbered subdirectory (e.g., base_dir/1/, base_dir/2/, etc.)
+    """
+    base_path = Path(base_dir)
+    existing_subdirs = [d for d in base_path.iterdir() if d.is_dir() and d.name.isdigit()]
+    next_num = len(existing_subdirs) + 1
+
+    subdir = base_path / str(next_num)
+    subdir.mkdir(parents=True, exist_ok=True)
+    logger.debug("Created call subdirectory: %s", subdir)
+
+    return subdir
+
+
+def _copy_additional_files(cwd: str, additional_files: dict[str, Path]) -> None:
+    """Copy additional files into working directory.
+
+    Args:
+        cwd: Working directory path
+        additional_files: Dict mapping destination filename to source Path
+
+    Raises:
+        FileNotFoundError: If source file doesn't exist
+    """
+    for dest_name, source_path in additional_files.items():
+        # Resolve relative paths from current working directory
+        resolved_source = source_path.resolve()
+
+        if not resolved_source.exists():
+            raise FileNotFoundError(
+                f"Additional file source not found: {source_path} "
+                f"(resolved to {resolved_source})"
+            )
+
+        if not resolved_source.is_file():
+            raise ValueError(
+                f"Additional file source is not a file: {source_path} "
+                f"(resolved to {resolved_source})"
+            )
+
+        # Create destination path (may include subdirectories)
+        dest_path = Path(cwd) / dest_name
+
+        # Create parent directories if needed
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Copy file (binary mode, preserves permissions and timestamps)
+        shutil.copy2(resolved_source, dest_path)
+
+        logger.info("Copied additional file: %s -> %s", source_path, dest_path)
+
+
 def _setup_working_directory_and_prompt(
     prompt: str, settings: ClaudeCodeSettings | None
 ) -> str:
@@ -267,15 +325,24 @@ def _setup_working_directory_and_prompt(
         settings: Optional settings
 
     Returns:
-        Working directory path
+        Working directory path (including call subdirectory)
     """
-    cwd = settings.get("working_directory") if settings else None
+    base_dir = settings.get("working_directory") if settings else None
 
-    if not cwd:
+    if not base_dir:
+        # Create temp directory - this will be the only call, so no subdirectory needed
         cwd = tempfile.mkdtemp(prefix="claude_prompt_")
         logger.debug("Created temporary working directory: %s", cwd)
+    else:
+        # User-specified directory - create numbered subdirectory to avoid overwrites
+        Path(base_dir).mkdir(parents=True, exist_ok=True)
+        cwd_path = _get_next_call_subdirectory(base_dir)
+        cwd = str(cwd_path)
 
-    Path(cwd).mkdir(parents=True, exist_ok=True)
+    # Copy additional files if specified (before writing prompt.md so they can be referenced)
+    additional_files = settings.get("additional_files") if settings else None
+    if additional_files:
+        _copy_additional_files(cwd, additional_files)
 
     prompt_file = Path(cwd) / "prompt.md"
     prompt_file.write_text(prompt)
@@ -290,6 +357,10 @@ def _setup_working_directory_and_prompt(
 
     # Save prompt for debugging if enabled
     _save_prompt_debug(prompt, settings)
+
+    # Store response filename in settings for later
+    if settings is not None:
+        settings["__response_file_path"] = str(Path(cwd) / "response.json")
 
     return cwd
 
@@ -454,7 +525,7 @@ def _try_sync_execution_with_rate_limit_retry(
     cwd: str,
     timeout_seconds: int,
     retry_enabled: bool,
-    prompt_len: int,
+    settings: ClaudeCodeSettings | None = None,
 ) -> tuple[ClaudeJSONResponse | None, bool]:
     """Try command execution with rate limit retry.
 
@@ -481,11 +552,12 @@ def _try_sync_execution_with_rate_limit_retry(
                 return None, True
 
             # Not an infrastructure failure - handle as usual
-            _handle_sync_command_failure(result, elapsed, prompt_len, cwd)
+            _handle_sync_command_failure(result, elapsed, 0, cwd)
 
         # Success - parse and return
         response = _parse_sync_json_response(result.stdout)
         _validate_claude_response(response)
+        _save_raw_response_to_working_dir(response, settings)
         return response, False
 
 
@@ -520,7 +592,7 @@ def run_claude_sync(
     for attempt in range(MAX_CLI_RETRIES):
         try:
             response, should_retry_infra = _try_sync_execution_with_rate_limit_retry(
-                cmd, cwd, timeout_seconds, retry_enabled, len(prompt)
+                cmd, cwd, timeout_seconds, retry_enabled, settings
             )
             if response:
                 _save_response_debug(response, settings)
@@ -699,7 +771,7 @@ async def _try_async_execution_with_rate_limit_retry(
     cwd: str,
     timeout_seconds: int,
     retry_enabled: bool,
-    prompt_len: int,
+    settings: ClaudeCodeSettings | None = None,
 ) -> tuple[ClaudeJSONResponse | None, bool]:
     """Try async command execution with rate limit retry.
 
@@ -731,11 +803,12 @@ async def _try_async_execution_with_rate_limit_retry(
                 return None, True
 
             # Not an infrastructure failure - handle as usual
-            _handle_async_command_failure(process_output, elapsed, prompt_len, cwd)
+            _handle_async_command_failure(process_output, elapsed, 0, cwd)
 
         # Success - parse and return
         response = _parse_sync_json_response(stdout.decode())
         _validate_claude_response(response)
+        _save_raw_response_to_working_dir(response, settings)
         return response, False
 
 
@@ -772,7 +845,7 @@ async def run_claude_async(
     for attempt in range(MAX_CLI_RETRIES):
         try:
             response, should_retry_infra = await _try_async_execution_with_rate_limit_retry(
-                cmd, cwd, timeout_seconds, retry_enabled, len(prompt)
+                cmd, cwd, timeout_seconds, retry_enabled, settings
             )
             if response:
                 _save_response_debug(response, settings)
@@ -915,3 +988,28 @@ def _save_response_debug(response: ClaudeJSONResponse, settings: ClaudeCodeSetti
 
     filepath.write_text(json.dumps(response, indent=2))
     logger.info("Saved response to: %s", filepath)
+
+
+def _save_raw_response_to_working_dir(
+    response: ClaudeJSONResponse, settings: ClaudeCodeSettings | None
+) -> None:
+    """Save raw response to working directory (always-on feature).
+
+    Args:
+        response: Claude response to save
+        settings: Settings dict containing __response_file_path
+    """
+    if not settings:
+        return
+
+    response_file = settings.get("__response_file_path")
+    if not response_file:
+        logger.debug("No response file path configured, skipping save")
+        return
+
+    try:
+        response_path = Path(response_file)
+        response_path.write_text(json.dumps(response, indent=2))
+        logger.info("Saved raw response to: %s", response_path)
+    except Exception as e:
+        logger.warning("Failed to save raw response to working directory: %s", e)

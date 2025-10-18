@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Type safety improvements**: Resolved all mypy type errors for strict type checking
+  - Added proper type casts in `structure_converter.py` for dictionary value access
+  - Added missing stream event types: `ClaudeStreamMessageStartEvent` and `ClaudeStreamContentBlockDeltaEvent`
+  - Fixed TypedDict compatibility issues in `utils.py` and `model.py`
+  - All 11 source files now pass mypy strict type checking with zero errors
+
+### Changed
+- **Code quality improvements**: Refactored complex functions to meet project standards
+  - Extracted `_format_field_tree_lines()` helper function to eliminate duplicate code
+  - Reduced `_build_array_of_objects_example()` from 37 to ≤30 statements
+  - Reduced `_build_object_example()` from 41 statements and 13 branches to within limits
+  - All code passes ruff checks (≤30 statements, ≤12 branches, ≤5 arguments)
+  - Improved code maintainability with shared formatting logic
+
+### Added
+- **Raw response saving**: Claude's raw JSON responses are now automatically saved to `response.json` in the working directory
+  - Saved alongside `prompt.md` for complete request/response pairs
+  - Always-on feature requiring no configuration
+  - Works for both sync and async execution paths
+  - Streaming requests only save `prompt.md` (events are incremental)
+  - Provides full transparency for debugging and inspection
+
+- **Numbered subdirectories for user-specified working directories**: Multiple CLI calls to the same working directory now create numbered subdirectories
+  - First call: `working_dir/1/prompt.md`, `working_dir/1/response.json`
+  - Second call: `working_dir/2/prompt.md`, `working_dir/2/response.json`
+  - Prevents file overwrites during multi-phase operations (tool selection + argument collection)
+  - Temp directories still work as before (no subdirectories for single-use temp dirs)
+
+- **Additional files feature**: New `additional_files` setting allows copying files into working directory for Claude to read
+  - Type: `dict[str, Path]` mapping destination filename to source file path
+  - Supports subdirectories in destination: `{"docs/spec.md": Path("specs/feature.md")}`
+  - Relative paths resolved from current working directory
+  - Binary-safe file copying with `shutil.copy2()` (preserves permissions and timestamps)
+  - Files copied before `prompt.md` is written so they can be referenced
+  - Each call gets its own isolated copies in numbered subdirectories
+  - Example:
+    ```python
+    agent.run_sync(
+        "Analyze utils.py and compare with spec.md",
+        model_settings={
+            "additional_files": {
+                "utils.py": Path("src/utils.py"),
+                "docs/spec.md": Path("specs/feature.md"),
+            }
+        }
+    )
+    ```
+
 ## [0.5.13] - 2025-10-17
 
 ### Fixed

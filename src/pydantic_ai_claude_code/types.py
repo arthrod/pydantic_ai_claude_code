@@ -1,5 +1,6 @@
 """Type definitions for Claude Code model."""
 
+from pathlib import Path
 from typing import Any, Literal, TypedDict
 
 
@@ -92,8 +93,27 @@ class ClaudeStreamResultEvent(TypedDict, total=False):
     error: str | None
 
 
+class ClaudeStreamMessageStartEvent(TypedDict, total=False):
+    """Message start event in stream-json output."""
+
+    type: Literal["message_start"]
+    message: dict[str, Any]
+
+
+class ClaudeStreamContentBlockDeltaEvent(TypedDict, total=False):
+    """Content block delta event in stream-json output."""
+
+    type: Literal["content_block_delta"]
+    index: int
+    delta: dict[str, Any]
+
+
 ClaudeStreamEvent = (
-    ClaudeStreamSystemEvent | ClaudeStreamAssistantEvent | ClaudeStreamResultEvent
+    ClaudeStreamSystemEvent
+    | ClaudeStreamAssistantEvent
+    | ClaudeStreamResultEvent
+    | ClaudeStreamMessageStartEvent
+    | ClaudeStreamContentBlockDeltaEvent
 )
 
 
@@ -117,6 +137,7 @@ class ClaudeCodeSettings(TypedDict, total=False):
     claude_cli_path: str | None  # Path to claude CLI binary (defaults to auto-resolved)
     extra_cli_args: list[str] | None  # Additional CLI arguments to pass through to claude CLI
     debug_save_prompts: str | bool  # Save prompts and responses to directory (True = /tmp/claude_debug, or specify path)
+    additional_files: dict[str, Path]  # Additional files to copy into working directory (destination filename -> source Path)
     __structured_output_file: str  # Internal: temp file path for structured output
     __unstructured_output_file: str  # Internal: temp file path for unstructured output
     __function_call_file: str  # Internal: temp file path for function call JSON
@@ -124,3 +145,4 @@ class ClaudeCodeSettings(TypedDict, total=False):
     __function_selection_mode__: bool  # Internal: whether function selection is active
     __available_functions__: dict[str, Any]  # Internal: available function definitions
     __selected_function__: str  # Internal: name of selected function
+    __response_file_path: str  # Internal: path to save raw response JSON

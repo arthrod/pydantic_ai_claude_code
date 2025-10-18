@@ -12,6 +12,8 @@ This package provides a Pydantic AI-compatible model implementation that wraps t
 - **True Streaming**: Real-time response streaming via Claude CLI's stream-json mode
 - **Local Execution**: All processing happens locally on your machine
 - **Session Persistence**: Maintain conversation context across multiple requests
+- **Additional Files**: Provide local files for Claude to read and analyze
+- **Automatic Response Saving**: Raw prompts and responses saved for debugging
 - **Configurable**: Fine-tune permissions, working directories, and tool access
 
 ## Installation
@@ -132,6 +134,35 @@ with ClaudeCodeProvider(use_temp_workspace=True) as provider:
 # Workspace automatically cleaned up
 ```
 
+### Providing Additional Files
+
+Provide local files for Claude to read and analyze:
+
+```python
+from pathlib import Path
+from pydantic_ai import Agent
+
+agent = Agent('claude-code:sonnet')
+
+result = agent.run_sync(
+    "Read utils.py and config.json. Summarize what they configure.",
+    model_settings={
+        "additional_files": {
+            "utils.py": Path("src/utils.py"),           # Copy single file
+            "config.json": Path("config/prod.json"),    # From different location
+            "docs/spec.md": Path("specs/feature.md"),   # Into subdirectory
+        }
+    }
+)
+```
+
+Files are copied into the working directory before execution, and Claude can reference them directly:
+- `"Read utils.py"`
+- `"Read config.json"`
+- `"Read docs/spec.md"`
+
+Each execution gets its own numbered subdirectory with isolated file copies.
+
 ### Logging
 
 The package uses Python's standard logging module. To enable debug logging in your application:
@@ -203,6 +234,7 @@ See the `examples/` directory for more demonstrations:
 - `async_example.py` - Async/await usage patterns
 - `advanced_example.py` - Custom provider configurations
 - `tools_and_streaming.py` - Custom tools and streaming responses
+- `additional_files_example.py` - Providing local files for analysis
 
 ## License
 

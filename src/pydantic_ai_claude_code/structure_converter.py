@@ -7,7 +7,7 @@ and back, maintaining exact type fidelity throughout the round-trip conversion.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 
 def _resolve_schema_ref(field_schema: dict[str, Any], root_schema: dict[str, Any]) -> dict[str, Any]:
@@ -29,7 +29,7 @@ def _resolve_schema_ref(field_schema: dict[str, Any], root_schema: dict[str, Any
         def_name = ref.split("/")[-1]
         defs = root_schema.get("$defs", {})
         if def_name in defs:
-            return defs[def_name]
+            return cast(dict[str, Any], defs[def_name])
 
     # If we can't resolve, return original
     return field_schema
@@ -69,14 +69,14 @@ def _get_non_null_type(field_schema: dict[str, Any]) -> str | None:
     """
     # Direct type
     if "type" in field_schema and field_schema["type"] != "null":
-        return field_schema["type"]
+        return cast(str, field_schema["type"])
 
     # Check anyOf/oneOf for non-null type
     for key in ("anyOf", "oneOf"):
         if key in field_schema:
             for option in field_schema[key]:
                 if option.get("type") and option["type"] != "null":
-                    return option["type"]
+                    return cast(str, option["type"])
 
     return None
 
@@ -102,7 +102,7 @@ def _get_non_null_schema(field_schema: dict[str, Any]) -> dict[str, Any]:
         if key in field_schema:
             for option in field_schema[key]:
                 if option.get("type") != "null":
-                    return option
+                    return cast(dict[str, Any], option)
 
     return field_schema
 
@@ -266,9 +266,7 @@ def read_structure_from_filesystem(
         is_nullable = _is_nullable(field_schema)
 
         # Check if path exists for this field
-        if field_type == "array":
-            field_path = base_path / field_name
-        elif field_type == "object":
+        if field_type in ("array", "object"):
             field_path = base_path / field_name
         else:
             field_path = base_path / f"{field_name}.txt"
@@ -686,7 +684,7 @@ def _build_field_descriptions(
         elif field_type == "object":
             nested_props = field_schema.get("properties", {})
             if nested_props:
-                nested_fields = ", ".join(f"{name}.txt" for name in nested_props.keys())
+                nested_fields = ", ".join(f"{name}.txt" for name in nested_props)
                 descriptions.append(
                     f"- {field_path}: Subfolder containing labelled subfolders and/or values (cannot be empty). "
                     f"Create directory '{field_path}/', then create files: {nested_fields}{desc_suffix}"
@@ -716,6 +714,53 @@ def _get_type_description(field_type: str) -> str:
     return type_map.get(field_type, "Value")
 
 
+def _format_field_tree_lines(
+    prefix: str,
+    field_name: str,
+    field_schema: dict[str, Any],
+    root_schema: dict[str, Any],
+    is_last: bool,
+) -> list[str]:
+    """Format tree lines for a single field.
+
+    Args:
+        prefix: Prefix string for indentation
+        field_name: Name of the field
+        field_schema: Schema for the field
+        root_schema: Root schema for resolving $ref
+        is_last: Whether this is the last field
+
+    Returns:
+        List of formatted tree lines
+    """
+    lines = []
+    field_desc = field_schema.get("description", "")
+    field_type = field_schema.get("type", "string")
+    branch = "└── " if is_last else "├── "
+    desc_comment = f"  # {field_desc}" if field_desc else ""
+
+    if field_type == "array":
+        lines.append(f"{prefix}{branch}{field_name}/{desc_comment}")
+        items_schema = field_schema.get("items", {})
+        items_schema = _resolve_schema_ref(items_schema, root_schema)
+        item_type = _get_non_null_type(items_schema) or "string"
+
+        if item_type == "object":
+            lines.append(f"{prefix}│   ├── 0000/")
+            lines.append(f"{prefix}│   │   └── ...")
+            lines.append(f"{prefix}{'│' if not is_last else ' '}   └── ...")
+        else:
+            lines.append(f"{prefix}│   ├── 0000.txt")
+            lines.append(f"{prefix}{'│' if not is_last else ' '}   └── ...")
+    elif field_type == "object":
+        lines.append(f"{prefix}{branch}{field_name}/{desc_comment}")
+        lines.append(f"{prefix}{'│' if not is_last else ' '}   └── ...")
+    else:
+        lines.append(f"{prefix}{branch}{field_name}.txt{desc_comment}")
+
+    return lines
+
+
 def _build_array_of_objects_example(
     indent_str: str,
     items_props: dict[str, Any],
@@ -732,24 +777,21 @@ def _build_array_of_objects_example(
         List of tree lines showing example array structure
     """
     lines = []
+
+    # Helper function to build field lines using the common formatter
+    def build_field_lines(prefix: str) -> None:
+        for sub_idx, (sub_name, sub_schema) in enumerate(items_props.items()):
+            sub_schema = _resolve_schema_ref(sub_schema, root_schema)
+            sub_is_last = sub_idx == len(items_props) - 1
+            field_lines = _format_field_tree_lines(prefix, sub_name, sub_schema, root_schema, sub_is_last)
+            lines.extend(field_lines)
+
     lines.append(f"{indent_str}    ├── [item_0]/")
-    for sub_idx, (sub_name, sub_schema) in enumerate(items_props.items()):
-        # Resolve $ref if present
-        sub_schema = _resolve_schema_ref(sub_schema, root_schema)
-        sub_desc = sub_schema.get("description", "")
-        sub_is_last = sub_idx == len(items_props) - 1
-        sub_branch = "└── " if sub_is_last else "├── "
-        desc_comment = f"  # {sub_desc}" if sub_desc else ""
-        lines.append(f"{indent_str}    │   {sub_branch}{sub_name}.txt{desc_comment}")
+    build_field_lines(f"{indent_str}    │   ")
+
     lines.append(f"{indent_str}    ├── [item_1]/")
-    for sub_idx, (sub_name, sub_schema) in enumerate(items_props.items()):
-        # Resolve $ref if present
-        sub_schema = _resolve_schema_ref(sub_schema, root_schema)
-        sub_desc = sub_schema.get("description", "")
-        sub_is_last = sub_idx == len(items_props) - 1
-        sub_branch = "└── " if sub_is_last else "├── "
-        desc_comment = f"  # {sub_desc}" if sub_desc else ""
-        lines.append(f"{indent_str}    │   {sub_branch}{sub_name}.txt{desc_comment}")
+    build_field_lines(f"{indent_str}    │   ")
+
     lines.append(f"{indent_str}    └── ...")
     return lines
 
@@ -788,30 +830,24 @@ def _build_object_example(
         List of tree lines showing example object structure
     """
     lines = []
+    prefix = f"{indent_str}    " if is_last else f"{indent_str}│   "
 
     if nested_props:
-        # Object has defined properties - show them
+        # Object has defined properties - show them using common formatter
         for sub_idx, (sub_name, sub_schema) in enumerate(nested_props.items()):
-            # Resolve $ref if present
             sub_schema = _resolve_schema_ref(sub_schema, root_schema)
-            sub_desc = sub_schema.get("description", "")
             sub_is_last = sub_idx == len(nested_props) - 1
-            sub_branch = "└── " if sub_is_last else "├── "
-            desc_comment = f"  # {sub_desc}" if sub_desc else ""
-            if is_last:
-                lines.append(f"{indent_str}    {sub_branch}{sub_name}.txt{desc_comment}")
-            else:
-                lines.append(f"{indent_str}│   {sub_branch}{sub_name}.txt{desc_comment}")
+            field_lines = _format_field_tree_lines(prefix, sub_name, sub_schema, root_schema, sub_is_last)
+            lines.extend(field_lines)
+    # Object has no defined properties - show template examples with "cannot be empty" indicator
+    elif is_last:
+        lines.append(f"{indent_str}    ├── [value_name_extracted_from_request].txt")
+        lines.append(f"{indent_str}    └── [item_name_extracted_from_request]/")
+        lines.append(f"{indent_str}        └── ...")
     else:
-        # Object has no defined properties - show template examples with "cannot be empty" indicator
-        if is_last:
-            lines.append(f"{indent_str}    ├── [value_name_extracted_from_request].txt")
-            lines.append(f"{indent_str}    └── [item_name_extracted_from_request]/")
-            lines.append(f"{indent_str}        └── ...")
-        else:
-            lines.append(f"{indent_str}│   ├── [value_name_extracted_from_request].txt")
-            lines.append(f"{indent_str}│   └── [item_name_extracted_from_request]/")
-            lines.append(f"{indent_str}│       └── ...")
+        lines.append(f"{indent_str}│   ├── [value_name_extracted_from_request].txt")
+        lines.append(f"{indent_str}│   └── [item_name_extracted_from_request]/")
+        lines.append(f"{indent_str}│       └── ...")
 
     return lines
 
