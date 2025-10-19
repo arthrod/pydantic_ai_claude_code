@@ -1,7 +1,6 @@
 """Message conversion utilities for Claude Code model."""
 
 import logging
-import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -23,29 +22,24 @@ logger = logging.getLogger(__name__)
 
 
 def _create_tool_result_file(
-    tool_name: str, content: str, counter: int
-) -> tuple[str, Path, str]:
-    """Create temporary file for tool result and return file info.
+    tool_name: str, content: str, counter: int, working_dir: str
+) -> str:
+    """Create file for tool result in working directory and return prompt reference.
 
     Args:
         tool_name: Name of the tool that produced the result
         content: Tool result content
         counter: Sequential counter for unique filenames
+        working_dir: Working directory where file should be created
 
     Returns:
-        Tuple of (filename, temp_file_path, prompt_reference)
+        Prompt reference string mentioning the file
     """
     filename = f"tool_result_{counter}_{tool_name}.txt"
+    file_path = Path(working_dir) / filename
 
-    # Create temp file with tool result content
-    with tempfile.NamedTemporaryFile(
-        mode='w',
-        suffix=".txt",
-        prefix=f"tool_result_{tool_name}_",
-        delete=False
-    ) as tf:
-        tf.write(str(content))
-        temp_file = Path(tf.name)
+    # Create file directly in working directory
+    file_path.write_text(str(content))
 
     prompt_reference = (
         f"Additional Information: The results from the {tool_name} tool "
@@ -53,32 +47,33 @@ def _create_tool_result_file(
     )
 
     logger.debug(
-        "Wrote tool result from %s to temp file %s (%d bytes)",
+        "Wrote tool result from %s to %s (%d bytes)",
         tool_name,
-        temp_file,
+        file_path,
         len(str(content))
     )
 
-    return filename, temp_file, prompt_reference
+    return prompt_reference
 
 
 def _process_request_parts(
     req_parts: Sequence[ModelRequestPart],
     skip_system_prompt: bool,
     tool_result_counter: int,
-) -> tuple[list[str], dict[str, Path], int]:
+    working_dir: str,
+) -> tuple[list[str], int]:
     """Process ModelRequest parts into prompt strings and files.
 
     Args:
         req_parts: Request message parts to process
         skip_system_prompt: Whether to skip system prompt parts
         tool_result_counter: Current tool result counter
+        working_dir: Working directory where tool result files should be created
 
     Returns:
-        Tuple of (prompt_parts, additional_files, updated_counter)
+        Tuple of (prompt_parts, updated_counter)
     """
     parts: list[str] = []
-    additional_files: dict[str, Path] = {}
 
     for req_part in req_parts:
         if isinstance(req_part, SystemPromptPart):
@@ -88,13 +83,12 @@ def _process_request_parts(
             parts.append(f"Request: {req_part.content}")
         elif isinstance(req_part, ToolReturnPart):
             tool_result_counter += 1
-            filename, temp_file, prompt_ref = _create_tool_result_file(
-                req_part.tool_name, str(req_part.content), tool_result_counter
+            prompt_ref = _create_tool_result_file(
+                req_part.tool_name, str(req_part.content), tool_result_counter, working_dir
             )
-            additional_files[filename] = temp_file
             parts.append(prompt_ref)
 
-    return parts, additional_files, tool_result_counter
+    return parts, tool_result_counter
 
 
 def _process_response_parts(resp_parts: Sequence[ModelResponsePart]) -> list[str]:
@@ -117,53 +111,50 @@ def _process_response_parts(resp_parts: Sequence[ModelResponsePart]) -> list[str
 
 
 def format_messages_for_claude(
-    messages: list[ModelMessage], *, skip_system_prompt: bool = False
-) -> tuple[str, dict[str, Path]]:
+    messages: list[ModelMessage], *, skip_system_prompt: bool = False, working_dir: str
+) -> str:
     """Convert Pydantic AI messages to a prompt string for Claude CLI.
 
-    Tool results are written to temporary files and returned as additional_files
-    rather than being embedded in the prompt. This follows the same pattern as
-    the additional_files feature.
+    Tool results are written directly to files in the working directory
+    and referenced in the prompt.
 
     Args:
         messages: List of Pydantic AI messages
-        skip_system_prompt: If True, skip SystemPromptPart from messages (used when we have tool results)
+        skip_system_prompt: If True, skip SystemPromptPart from messages (used when we
+        have tool results)
+        working_dir: Working directory where tool result files should be created
 
     Returns:
-        Tuple of (formatted_prompt, additional_files_dict)
-        - formatted_prompt: The prompt string with file references
-        - additional_files_dict: Dict mapping destination filename -> temp file Path
+        Formatted prompt string with file references for tool results
     """
     logger.debug(
-        "Formatting %d messages for Claude CLI (skip_system_prompt=%s)",
+        "Formatting %d messages for Claude CLI (skip_system_prompt=%s, working_dir=%s)",
         len(messages),
         skip_system_prompt,
+        working_dir,
     )
 
     all_parts: list[str] = []
-    all_files: dict[str, Path] = {}
     tool_result_counter = 0
 
     for message in messages:
         if isinstance(message, ModelRequest):
-            msg_parts, msg_files, tool_result_counter = _process_request_parts(
-                message.parts, skip_system_prompt, tool_result_counter
+            msg_parts, tool_result_counter = _process_request_parts(
+                message.parts, skip_system_prompt, tool_result_counter, working_dir
             )
             all_parts.extend(msg_parts)
-            all_files.update(msg_files)
         elif isinstance(message, ModelResponse):
             msg_parts = _process_response_parts(message.parts)
             all_parts.extend(msg_parts)
 
     formatted_prompt = "\n\n".join(all_parts)
     logger.debug(
-        "Formatted prompt: %d parts, %d total chars, %d tool result files",
+        "Formatted prompt: %d parts, %d total chars",
         len(all_parts),
         len(formatted_prompt),
-        len(all_files)
     )
 
-    return formatted_prompt, all_files
+    return formatted_prompt
 
 
 def extract_text_from_response(response_text: str) -> str:

@@ -134,9 +134,9 @@ def test_resolve_claude_cli_path_not_found():
     with (
         mock.patch.dict(os.environ, {}, clear=True),  # Clear environment
         mock.patch("shutil.which", return_value=None),
+        pytest.raises(RuntimeError, match="Could not find claude CLI binary"),
     ):
-        with pytest.raises(RuntimeError, match="Could not find claude CLI binary"):
-            resolve_claude_cli_path()
+        resolve_claude_cli_path()
 
 
 def test_resolve_claude_cli_path_real_which():

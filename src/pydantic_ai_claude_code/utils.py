@@ -1,5 +1,6 @@
 """Utility functions for Claude Code model."""
 
+import asyncio
 import json
 import logging
 import os
@@ -21,6 +22,75 @@ logger = logging.getLogger(__name__)
 LONG_RUNTIME_THRESHOLD_SECONDS = 600  # 10 minutes threshold for long runtime warnings
 MAX_CLI_RETRIES = 3  # Maximum retries for transient CLI infrastructure failures
 RETRY_BACKOFF_BASE = 2  # Exponential backoff base (seconds)
+
+
+def strip_markdown_code_fence(text: str) -> str:
+    """Remove markdown code fence markers from text.
+
+    Strips ```json, ```, and trailing ``` from text before parsing.
+
+    Args:
+        text: Text potentially wrapped in markdown code fences
+
+    Returns:
+        Cleaned text with code fences removed
+    """
+    cleaned = text.strip()
+
+    # Remove starting code fence
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:]
+    elif cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+
+    # Remove ending code fence
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+
+    return cleaned.strip()
+
+
+async def create_subprocess_async(
+    cmd: list[str], cwd: str | None = None
+) -> asyncio.subprocess.Process:
+    """Create an async subprocess with standard configuration.
+
+    Args:
+        cmd: Command and arguments to execute
+        cwd: Working directory for the process
+
+    Returns:
+        Started subprocess with stdout/stderr piped and stdin as DEVNULL
+    """
+    # stdin=DEVNULL because the CLI is non-interactive and should not read from stdin
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        stdin=asyncio.subprocess.DEVNULL,
+        cwd=cwd,
+    )
+    return process
+
+
+def _format_cli_error_message(elapsed: float, returncode: int, stderr_text: str) -> str:
+    """Format error message for CLI failures.
+
+    Args:
+        elapsed: Time elapsed in seconds
+        returncode: Process return code
+        stderr_text: Standard error output
+
+    Returns:
+        Formatted error message
+    """
+    if elapsed > LONG_RUNTIME_THRESHOLD_SECONDS:
+        return (
+            f"Claude CLI failed after {elapsed:.1f}s with return code {returncode}: {stderr_text}\n"
+            f"Long runtime suggests task complexity - consider breaking into smaller tasks."
+        )
+    else:
+        return f"Claude CLI error after {elapsed:.1f}s: {stderr_text}"
 
 
 def resolve_claude_cli_path(settings: ClaudeCodeSettings | None = None) -> str:
@@ -385,6 +455,41 @@ def _copy_additional_files(cwd: str, additional_files: dict[str, Path]) -> None:
         logger.info("Copied additional file: %s -> %s", source_path, dest_path)
 
 
+def _determine_working_directory(settings: ClaudeCodeSettings | None) -> str:
+    """Determine working directory path without creating it yet.
+
+    Args:
+        settings: Optional settings
+
+    Returns:
+        Working directory path that will be used
+    """
+    base_dir = settings.get("working_directory") if settings else None
+
+    if not base_dir:
+        # Will create temp directory later
+        # For now, just return a path that will be created
+        return tempfile.mkdtemp(prefix="claude_prompt_")
+    else:
+        # User-specified directory - will create numbered subdirectory later
+        Path(base_dir).mkdir(parents=True, exist_ok=True)
+        existing_subdirs = [d for d in Path(base_dir).iterdir() if d.is_dir() and d.name.isdigit()]
+        next_num = len(existing_subdirs) + 1
+        return str(Path(base_dir) / str(next_num))
+
+
+def _log_prompt_info(prompt_file: Path, prompt: str) -> None:
+    """Log prompt information for debugging."""
+    logger.info("=" * 80)
+    logger.info("PROMPT WRITTEN TO: %s", prompt_file)
+    logger.info("PROMPT LENGTH: %d chars", len(prompt))
+    logger.info("=" * 80)
+    logger.info("COMPLETE PROMPT CONTENT:")
+    logger.info("=" * 80)
+    logger.info("%s", prompt)
+    logger.info("=" * 80)
+
+
 def _setup_working_directory_and_prompt(
     prompt: str, settings: ClaudeCodeSettings | None
 ) -> str:
@@ -397,17 +502,25 @@ def _setup_working_directory_and_prompt(
     Returns:
         Working directory path (including call subdirectory)
     """
-    base_dir = settings.get("working_directory") if settings else None
+    # Get working directory from settings (should already be set)
+    cwd = settings.get("__working_directory") if settings else None
 
-    if not base_dir:
-        # Create temp directory - this will be the only call, so no subdirectory needed
-        cwd = tempfile.mkdtemp(prefix="claude_prompt_")
-        logger.debug("Created temporary working directory: %s", cwd)
+    if not cwd:
+        # Fallback: determine it now if not already set
+        base_dir = settings.get("working_directory") if settings else None
+        if not base_dir:
+            # Create temp directory - this will be the only call, so no subdirectory needed
+            cwd = tempfile.mkdtemp(prefix="claude_prompt_")
+            logger.debug("Created temporary working directory: %s", cwd)
+        else:
+            # User-specified directory - create numbered subdirectory to avoid overwrites
+            Path(base_dir).mkdir(parents=True, exist_ok=True)
+            cwd_path = _get_next_call_subdirectory(base_dir)
+            cwd = str(cwd_path)
     else:
-        # User-specified directory - create numbered subdirectory to avoid overwrites
-        Path(base_dir).mkdir(parents=True, exist_ok=True)
-        cwd_path = _get_next_call_subdirectory(base_dir)
-        cwd = str(cwd_path)
+        # Directory path already determined, just ensure it exists
+        Path(cwd).mkdir(parents=True, exist_ok=True)
+        logger.debug("Using pre-determined working directory: %s", cwd)
 
     # Copy additional files if specified (before writing prompt.md so they can be referenced)
     additional_files = settings.get("additional_files") if settings else None
@@ -416,20 +529,14 @@ def _setup_working_directory_and_prompt(
 
     prompt_file = Path(cwd) / "prompt.md"
     prompt_file.write_text(prompt)
-    logger.info("=" * 80)
-    logger.info("PROMPT WRITTEN TO: %s", prompt_file)
-    logger.info("PROMPT LENGTH: %d chars", len(prompt))
-    logger.info("=" * 80)
-    logger.info("COMPLETE PROMPT CONTENT:")
-    logger.info("=" * 80)
-    logger.info("%s", prompt)
-    logger.info("=" * 80)
+    _log_prompt_info(prompt_file, prompt)
 
     # Save prompt for debugging if enabled
     _save_prompt_debug(prompt, settings)
 
-    # Store response filename in settings for later
+    # Store working directory and response filename in settings for later
     if settings is not None:
+        settings["__working_directory"] = cwd
         settings["__response_file_path"] = str(Path(cwd) / "response.json")
 
     return cwd
@@ -537,13 +644,8 @@ def _handle_sync_command_failure(
     )
 
     # Generic error handling
-    if elapsed > LONG_RUNTIME_THRESHOLD_SECONDS:
-        raise RuntimeError(
-            f"Claude CLI failed after {elapsed:.1f}s with return code {result.returncode}: {stderr_text}\n"
-            f"Long runtime suggests task complexity - consider breaking into smaller tasks."
-        )
-    else:
-        raise RuntimeError(f"Claude CLI error after {elapsed:.1f}s: {stderr_text}")
+    error_msg = _format_cli_error_message(elapsed, result.returncode, stderr_text)
+    raise RuntimeError(error_msg)
 
 
 def _parse_sync_json_response(raw_stdout: str) -> ClaudeJSONResponse:
@@ -749,18 +851,10 @@ async def _execute_async_command(
     Raises:
         RuntimeError: On timeout
     """
-    import asyncio
-
     start_time = time.time()
     logger.info("Running Claude CLI asynchronously in %s", cwd)
 
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        stdin=asyncio.subprocess.DEVNULL,
-        cwd=cwd,
-    )
+    process = await create_subprocess_async(cmd, cwd)
 
     try:
         stdout, stderr = await asyncio.wait_for(
@@ -852,13 +946,8 @@ def _handle_async_command_failure(
     )
 
     # Generic error handling
-    if elapsed > LONG_RUNTIME_THRESHOLD_SECONDS:
-        raise RuntimeError(
-            f"Claude CLI failed after {elapsed:.1f}s with return code {returncode}: {stderr_text}\n"
-            f"Long runtime suggests task complexity - consider breaking into smaller tasks."
-        )
-    else:
-        raise RuntimeError(f"Claude CLI error after {elapsed:.1f}s: {stderr_text}")
+    error_msg = _format_cli_error_message(elapsed, returncode, stderr_text)
+    raise RuntimeError(error_msg)
 
 
 async def _try_async_execution_with_rate_limit_retry(
@@ -879,8 +968,6 @@ async def _try_async_execution_with_rate_limit_retry(
     Returns:
         Tuple of (response if successful or None, should_retry_infra)
     """
-    import asyncio
-
     while True:
         start_time = time.time()
         process_output = await _execute_async_command(cmd, cwd, timeout_seconds)
@@ -945,8 +1032,6 @@ async def run_claude_async(
         subprocess.CalledProcessError: If Claude CLI fails
         json.JSONDecodeError: If response is not valid JSON
     """
-    import asyncio
-
     retry_enabled = settings.get("retry_on_rate_limit", True) if settings else True
     timeout_seconds = settings.get("timeout_seconds", 900) if settings else 900
 

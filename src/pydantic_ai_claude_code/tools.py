@@ -3,10 +3,12 @@
 import json
 import logging
 import re
-import uuid
 from typing import Any
 
 from pydantic_ai.messages import ToolCallPart
+
+from .response_utils import create_tool_call_part
+from .utils import strip_markdown_code_fence
 
 logger = logging.getLogger(__name__)
 
@@ -158,10 +160,9 @@ def _parse_execute_format(response_text: str) -> list[ToolCallPart] | None:
 
     logger.debug("Parsed EXECUTE format: %s with %d args", tool_name, len(args))
     return [
-        ToolCallPart(
+        create_tool_call_part(
             tool_name=tool_name,
             args=args,
-            tool_call_id=f"call_{uuid.uuid4().hex[:16]}",
         )
     ]
 
@@ -175,14 +176,7 @@ def _parse_legacy_json_format(response_text: str) -> list[ToolCallPart] | None:
     Returns:
         List of ToolCallPart or None if not found
     """
-    cleaned = response_text.strip()
-    if cleaned.startswith("```json"):
-        cleaned = cleaned[7:]
-    elif cleaned.startswith("```"):
-        cleaned = cleaned[3:]
-    if cleaned.endswith("```"):
-        cleaned = cleaned[:-3]
-    cleaned = cleaned.strip()
+    cleaned = strip_markdown_code_fence(response_text)
 
     try:
         data = json.loads(cleaned)
@@ -260,10 +254,9 @@ def _convert_to_tool_call_parts(calls: list[Any]) -> list[ToolCallPart] | None:
         )
 
         tool_call_parts.append(
-            ToolCallPart(
+            create_tool_call_part(
                 tool_name=tool_name,
                 args=args,
-                tool_call_id=f"call_{uuid.uuid4().hex[:16]}",
             )
         )
 

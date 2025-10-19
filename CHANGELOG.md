@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2025-10-19
+
+### Changed
+- **Working directory improvements**: Consolidated all temporary files to use working directory instead of /tmp
+  - Working directory is now pre-determined early in the request flow for consistent usage
+  - All temp files (structured output, unstructured output, tool results, data structures) created in working directory
+  - Added `__working_directory` internal setting to track the determined path across all phases
+  - Prevents scattered temp files across filesystem - everything in one organized location
+  - Better cleanup and debugging when all files are co-located with prompt.md
+
+- **Tool result file handling**: Simplified tool result storage by writing directly to working directory
+  - Changed from temporary files in /tmp to files in working directory alongside prompt.md
+  - Removed complex additional_files merging logic - tool results now part of working directory
+  - Tool result files named `tool_result_{counter}_{tool_name}.txt` for clarity
+  - Streamlined message formatting by eliminating the tuple return value (no longer need separate file dict)
+  - Improved traceability: all request artifacts (prompt, response, tool results) in same directory
+
+- **Code organization**: Extracted common utilities into focused modules for better maintainability
+  - Created `logging_utils.py` for standardized logging patterns (`log_section_separator`, `log_section_end`)
+  - Created `response_utils.py` for response construction helpers (`create_tool_call_part`, `extract_model_parameters`, `get_working_directory`)
+  - Created `temp_path_utils.py` for path generation (`generate_output_file_path`, `generate_temp_directory_path`)
+  - Reduced code duplication across model.py, utils.py, and messages.py
+  - Better separation of concerns with focused, single-purpose utility functions
+
+- **Argument collection improvements**: Enhanced function calling with better context
+  - Argument collection instructions now include function name and description
+  - Added `__tool_name` and `__tool_description` to internal settings for retry attempts
+  - Function context stored during initial setup and reused in retry prompts
+  - Helps Claude understand the purpose of arguments being collected
+
+- **Type safety improvements**: Added new TypedDict for model settings
+  - New `ClaudeCodeModelSettings` extends Pydantic AI's `ModelSettings`
+  - Includes Claude Code specific fields: `working_directory`, `additional_files`
+  - Provides type hints for model_settings parameter in `agent.run_sync()`
+  - Better IDE support and type checking when passing model settings
+
+### Added
+- **Web search support**: Added DuckDuckGo search capability via pydantic-ai-slim
+  - Added `pydantic-ai-slim[duckduckgo]>=1.0.15` dependency
+  - Enables use of Pydantic AI's `WebSearchTool` with Claude Code
+  - New examples: `websearch_example.py` demonstrates 5 web search patterns
+  - Supports search context sizing, domain filtering, and usage limits
+
+- **Utility functions**: Added helper functions to improve code quality
+  - `strip_markdown_code_fence()` in utils.py for cleaning code fence markers
+  - `create_subprocess_async()` in utils.py for standardized async subprocess creation
+  - `_format_cli_error_message()` in utils.py for consistent error formatting
+  - `_determine_working_directory()` in utils.py for early directory path determination
+  - `_log_prompt_info()` in utils.py for standardized prompt logging
+
 ## [0.6.0] - 2025-10-19
 
 ### Added

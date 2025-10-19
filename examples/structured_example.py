@@ -3,6 +3,8 @@
 from pydantic import BaseModel
 from pydantic_ai import Agent
 
+import pydantic_ai_claude_code  # noqa: F401 - registers the provider
+
 
 class MathResult(BaseModel):
     """A mathematical calculation result."""
@@ -19,33 +21,33 @@ class CodeAnalysis(BaseModel):
     description: str
 
 
-def main():
+def main() -> None:
     """Run structured output examples."""
     # Example 1: Math result
     print("Example 1: Structured Math Result")
     print("-" * 50)
-    agent = Agent("claude-code:sonnet", output_type=MathResult)
+    math_agent = Agent("claude-code:sonnet", output_type=MathResult)
 
-    result = agent.run_sync("Calculate 15 * 23")
+    result = math_agent.run_sync("Calculate 15 * 23")
     print(f"Answer: {result.output.answer}")
     print(f"Explanation: {result.output.explanation}\n")
 
     # Example 2: Code analysis
     print("Example 2: Structured Code Analysis")
     print("-" * 50)
-    agent = Agent("claude-code:sonnet", output_type=CodeAnalysis)
+    code_agent = Agent("claude-code:sonnet", output_type=CodeAnalysis)
 
-    result = agent.run_sync(
+    result2 = code_agent.run_sync(
         "Analyze: def factorial(n): return 1 if n <= 1 else n * factorial(n-1)"
     )
-    print(f"Complexity Score: {result.output.complexity_score}/10")
-    print(f"Is Recursive: {result.output.is_recursive}")
-    print(f"Description: {result.output.description}\n")
+    print(f"Complexity Score: {result2.output.complexity_score}/10")
+    print(f"Is Recursive: {result2.output.is_recursive}")
+    print(f"Description: {result2.output.description}\n")
 
     # Example 3: Usage tracking with structured output
     print("Example 3: Usage Tracking")
     print("-" * 50)
-    usage = result.usage()
+    usage = result2.usage()
     print(f"Input tokens: {usage.input_tokens}")
     print(f"Output tokens: {usage.output_tokens}")
     print(f"Total tokens: {usage.total_tokens}")

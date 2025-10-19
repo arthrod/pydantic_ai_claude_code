@@ -1,12 +1,12 @@
 """Streaming utilities for Claude Code model."""
 
-import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
 from typing import cast
 
 from .types import ClaudeStreamEvent
+from .utils import create_subprocess_async
 
 logger = logging.getLogger(__name__)
 
@@ -29,14 +29,7 @@ async def run_claude_streaming(
     logger.debug("Streaming command: %s", " ".join(cmd))
 
     # Start the process
-    # stdin=DEVNULL because the CLI is non-interactive and should not read from stdin
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        stdin=asyncio.subprocess.DEVNULL,
-        cwd=cwd,
-    )
+    process = await create_subprocess_async(cmd, cwd)
 
     assert process.stdout is not None
 

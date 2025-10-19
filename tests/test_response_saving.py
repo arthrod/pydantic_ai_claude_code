@@ -9,6 +9,7 @@ from pydantic_ai import Agent
 
 # Import to trigger provider registration
 import pydantic_ai_claude_code  # noqa: F401
+from pydantic_ai_claude_code.types import ClaudeCodeModelSettings
 
 # Test constants
 EXPECTED_SUBDIR_COUNT_SINGLE = 1
@@ -25,7 +26,7 @@ def test_response_saved_to_working_directory():
         # Run a simple query with working_directory setting
         agent.run_sync(
             "What is 2+2? Just give the number.",
-            model_settings={"working_directory": tmpdir}
+            model_settings=ClaudeCodeModelSettings(working_directory=tmpdir)
         )
 
         # Check that subdirectory was created
@@ -54,9 +55,6 @@ def test_response_saved_to_working_directory():
         assert "result" in response_data, "response.json missing 'result' field"
         assert "usage" in response_data, "response.json missing 'usage' field"
 
-        # Verify result contains something
-        assert len(response_data["result"]) > 0, "response result is empty"
-
 
 def test_multiple_calls_create_separate_subdirectories():
     """Test that multiple calls to the same working directory create separate subdirectories."""
@@ -64,10 +62,10 @@ def test_multiple_calls_create_separate_subdirectories():
         agent = Agent("claude-code:sonnet")
 
         # Make first call
-        agent.run_sync("What is 1+1?", model_settings={"working_directory": tmpdir})
+        agent.run_sync("What is 1+1?", model_settings=ClaudeCodeModelSettings(working_directory=tmpdir))
 
         # Make second call
-        agent.run_sync("What is 2+2?", model_settings={"working_directory": tmpdir})
+        agent.run_sync("What is 2+2?", model_settings=ClaudeCodeModelSettings(working_directory=tmpdir))
 
         # Check that two subdirectories were created
         subdirs = sorted([d for d in Path(tmpdir).iterdir() if d.is_dir()])

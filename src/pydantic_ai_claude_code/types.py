@@ -3,6 +3,8 @@
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 
+from pydantic_ai.settings import ModelSettings
+
 
 class ClaudeUsage(TypedDict, total=False):
     """Usage statistics from Claude CLI."""
@@ -117,10 +119,23 @@ ClaudeStreamEvent = (
 )
 
 
+class ClaudeCodeModelSettings(ModelSettings, total=False):
+    """Extended ModelSettings that includes Claude Code specific fields.
+
+    This extends pydantic_ai's ModelSettings to add our custom fields
+    like working_directory and additional_files that can be passed
+    via model_settings parameter in agent.run_sync().
+    """
+
+    working_directory: str
+    additional_files: dict[str, Path]
+
+
 class ClaudeCodeSettings(TypedDict, total=False):
     """Settings for Claude Code CLI execution."""
 
     working_directory: str | None
+    use_temp_workspace: bool  # Create temporary workspace (default: True)
     allowed_tools: list[str] | None
     disallowed_tools: list[str] | None
     append_system_prompt: str | None
@@ -146,3 +161,6 @@ class ClaudeCodeSettings(TypedDict, total=False):
     __available_functions__: dict[str, Any]  # Internal: available function definitions
     __selected_function__: str  # Internal: name of selected function
     __response_file_path: str  # Internal: path to save raw response JSON
+    __working_directory: str  # Internal: determined working directory path
+    __tool_name: str  # Internal: name of tool for argument collection
+    __tool_description: str  # Internal: description of tool for argument collection

@@ -66,8 +66,9 @@ def test_provider_settings():
 def test_temp_workspace():
     """Test with temporary workspace (uses explicit model for provider testing)."""
     from pydantic_ai_claude_code import ClaudeCodeModel
+    from pydantic_ai_claude_code.types import ClaudeCodeSettings
 
-    with ClaudeCodeProvider(settings={"use_temp_workspace": True}) as provider:
+    with ClaudeCodeProvider(settings=ClaudeCodeSettings(use_temp_workspace=True)) as provider:
         assert provider.working_directory is not None
         assert provider._temp_dir is not None
 

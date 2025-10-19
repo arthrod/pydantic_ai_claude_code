@@ -522,12 +522,19 @@ def _read_object_field(
     return read_structure_from_filesystem(field_schema, object_dir, root_schema)
 
 
-def build_structure_instructions(schema: dict[str, Any], temp_dir: str) -> str:
+def build_structure_instructions(
+    schema: dict[str, Any],
+    temp_dir: str,
+    tool_name: str | None = None,
+    tool_description: str | None = None,
+) -> str:
     """Build human-readable instructions for creating filesystem structure.
 
     Args:
         schema: JSON schema defining structure
         temp_dir: Temporary directory path to use
+        tool_name: Optional function/tool name (for argument collection context)
+        tool_description: Optional function/tool description (for argument collection context)
 
     Returns:
         Instruction string without JSON terminology
@@ -540,6 +547,23 @@ def build_structure_instructions(schema: dict[str, Any], temp_dir: str) -> str:
 
     # Build example structure
     example_structure = _build_example_structure(properties, schema)
+
+    # Build function context section if provided
+    function_context = ""
+    if tool_name and tool_description:
+        function_context = f"""
+---
+
+## Function Context
+
+**You are collecting arguments for the function: `{tool_name}()`**
+
+**Purpose:** {tool_description}
+
+**Important:** The information you extract from the request below should be the INPUT PARAMETERS for this function, NOT the expected output or results.
+
+---
+"""
 
     instructions = f"""# Task: Organize Information into File Structure
 
@@ -634,7 +658,7 @@ Create a subfolder, then create appropriately named files for values **OR** subf
 {", ".join(required_fields) if required_fields else "All fields listed above"}
 
 ---
-
+{function_context}
 > **CRITICAL:**
 > - Read the request below carefully
 > - Extract **ALL** necessary values, names, and data from the request text

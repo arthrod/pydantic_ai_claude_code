@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 
 from pydantic_ai_claude_code import ClaudeCodeModel, ClaudeCodeProvider
+from pydantic_ai_claude_code.types import ClaudeCodeSettings
 
 
 class ProjectAnalysis(BaseModel):
@@ -14,16 +15,18 @@ class ProjectAnalysis(BaseModel):
     summary: str
 
 
-def main():
+def main() -> None:
     """Run advanced examples."""
     # Example 1: Custom provider with tool restrictions
     print("Example 1: Custom Provider Configuration")
     print("-" * 50)
 
     provider = ClaudeCodeProvider(
-        allowed_tools=["Read", "Grep", "Glob"],  # Only allow read-only tools
-        verbose=False,
-        use_temp_workspace=False,  # Override default - no filesystem access needed
+        settings=ClaudeCodeSettings(
+            allowed_tools=["Read", "Grep", "Glob"],  # Only allow read-only tools
+            verbose=False,
+            use_temp_workspace=False,  # Override default - no filesystem access needed
+        )
     )
 
     model = ClaudeCodeModel("sonnet", provider=provider)
@@ -36,7 +39,7 @@ def main():
     print("Example 2: Temporary Workspace")
     print("-" * 50)
 
-    with ClaudeCodeProvider(use_temp_workspace=True) as temp_provider:
+    with ClaudeCodeProvider(settings=ClaudeCodeSettings(use_temp_workspace=True)) as temp_provider:
         model = ClaudeCodeModel("sonnet", provider=temp_provider)
         agent = Agent(model)
 
@@ -53,8 +56,10 @@ def main():
     print("-" * 50)
 
     provider = ClaudeCodeProvider(
-        append_system_prompt="You are a concise assistant. Always respond in 20 words or less.",
-        use_temp_workspace=False,  # Override default - no filesystem access needed
+        settings=ClaudeCodeSettings(
+            append_system_prompt="You are a concise assistant. Always respond in 20 words or less.",
+            use_temp_workspace=False,  # Override default - no filesystem access needed
+        )
     )
 
     model = ClaudeCodeModel("sonnet", provider=provider)

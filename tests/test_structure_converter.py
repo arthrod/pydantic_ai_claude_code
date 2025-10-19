@@ -8,6 +8,7 @@ These tests verify that:
 
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import BaseModel, Field
@@ -241,6 +242,9 @@ def test_nested_object_round_trip():
 
 def test_array_of_objects_round_trip():
     """Test round-trip conversion with arrays of objects."""
+    # Test data constant
+    num_chapters = 3
+
     schema = {
         "properties": {
             "title": {"type": "string"},
@@ -296,7 +300,7 @@ def test_array_of_objects_round_trip():
 
         # Verify exact equality
         assert loaded_data == original_data
-        assert len(loaded_data["chapters"]) == 3
+        assert len(loaded_data["chapters"]) == num_chapters
         assert all(type(ch["number"]) is int for ch in loaded_data["chapters"])
         assert all(type(ch["pages"]) is int for ch in loaded_data["chapters"])
         assert all(type(ch["completed"]) is bool for ch in loaded_data["chapters"])
@@ -306,7 +310,7 @@ def test_array_of_objects_round_trip():
         write_structure_to_filesystem(loaded_data, schema, base_path2)
 
         # Verify identical structure
-        for i in range(3):
+        for i in range(num_chapters):
             chapter_dir = f"{i:04d}"
             assert (base_path2 / "chapters" / chapter_dir / "number.txt").read_text() == (
                 base_path / "chapters" / chapter_dir / "number.txt"
@@ -316,8 +320,34 @@ def test_array_of_objects_round_trip():
             ).read_text()
 
 
+def _verify_complex_nested_filesystem(base_path: Path) -> None:
+    """Verify filesystem structure for complex nested test."""
+    assert (base_path / "course_name.txt").read_text() == "Machine Learning Fundamentals"
+    assert (base_path / "instructor" / "name.txt").read_text() == "Dr. Sarah Chen"
+    assert (base_path / "instructor" / "years_experience.txt").read_text() == "12"
+
+    # Verify students array with nested grades array
+    assert (base_path / "students" / "0000" / "student_id.txt").read_text() == "1001"
+    assert (base_path / "students" / "0000" / "name.txt").read_text() == "Bob Wilson"
+    assert (base_path / "students" / "0000" / "grades").is_dir()
+    assert (base_path / "students" / "0000" / "grades" / "0000.txt").read_text() == "88.5"
+    assert (base_path / "students" / "0000" / "grades" / "0001.txt").read_text() == "92.0"
+    assert (base_path / "students" / "0000" / "grades" / "0002.txt").read_text() == "85.5"
+    assert (base_path / "students" / "0000" / "passed.txt").read_text() == "true"
+    assert (base_path / "students" / "0002" / "student_id.txt").read_text() == "1003"
+    assert (base_path / "students" / "0002" / "passed.txt").read_text() == "false"
+
+    # Verify tags
+    assert (base_path / "tags" / "0000.txt").read_text() == "machine-learning"
+    assert (base_path / "tags" / "0003.txt").read_text() == "beginner"
+
+
 def test_complex_deeply_nested_round_trip():
     """Test round-trip conversion with complex deeply nested structures."""
+    # Test data constants
+    num_students = 3
+    num_grades_per_student = 3
+
     schema = {
         "properties": {
             "course_name": {"type": "string"},
@@ -384,30 +414,8 @@ def test_complex_deeply_nested_round_trip():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         base_path = Path(tmpdir) / "data"
-
-        # Data → Filesystem
         write_structure_to_filesystem(original_data, schema, base_path)
-
-        # Verify complex nested structure
-        assert (base_path / "course_name.txt").read_text() == "Machine Learning Fundamentals"
-        assert (base_path / "instructor" / "name.txt").read_text() == "Dr. Sarah Chen"
-        assert (base_path / "instructor" / "years_experience.txt").read_text() == "12"
-
-        # Verify students array with nested grades array
-        assert (base_path / "students" / "0000" / "student_id.txt").read_text() == "1001"
-        assert (base_path / "students" / "0000" / "name.txt").read_text() == "Bob Wilson"
-        assert (base_path / "students" / "0000" / "grades").is_dir()
-        assert (base_path / "students" / "0000" / "grades" / "0000.txt").read_text() == "88.5"
-        assert (base_path / "students" / "0000" / "grades" / "0001.txt").read_text() == "92.0"
-        assert (base_path / "students" / "0000" / "grades" / "0002.txt").read_text() == "85.5"
-        assert (base_path / "students" / "0000" / "passed.txt").read_text() == "true"
-
-        assert (base_path / "students" / "0002" / "student_id.txt").read_text() == "1003"
-        assert (base_path / "students" / "0002" / "passed.txt").read_text() == "false"
-
-        # Verify tags
-        assert (base_path / "tags" / "0000.txt").read_text() == "machine-learning"
-        assert (base_path / "tags" / "0003.txt").read_text() == "beginner"
+        _verify_complex_nested_filesystem(base_path)
 
         # Filesystem → Data
         loaded_data = read_structure_from_filesystem(schema, base_path)
@@ -415,10 +423,10 @@ def test_complex_deeply_nested_round_trip():
         # Verify exact equality
         assert loaded_data == original_data
         assert type(loaded_data["instructor"]["years_experience"]) is int
-        assert len(loaded_data["students"]) == 3
+        assert len(loaded_data["students"]) == num_students
         assert all(type(s["student_id"]) is int for s in loaded_data["students"])
         assert all(type(s["passed"]) is bool for s in loaded_data["students"])
-        assert all(len(s["grades"]) == 3 for s in loaded_data["students"])
+        assert all(len(s["grades"]) == num_grades_per_student for s in loaded_data["students"])
         assert all(type(g) is float for s in loaded_data["students"] for g in s["grades"])
 
         # Data → Filesystem again
@@ -499,7 +507,7 @@ def test_empty_arrays():
         "required": [],
     }
 
-    original_data = {
+    original_data: dict[str, list[Any]] = {
         "tags": [],
         "scores": [],
     }
@@ -645,6 +653,28 @@ def test_required_fields_still_raise_errors():
             read_structure_from_filesystem(schema, base_path)
 
 
+def _verify_ref_schema_filesystem(base_path: Path) -> None:
+    """Verify filesystem structure for $ref schema test."""
+    # Verify nested object array structure (not primitive files!)
+    assert (base_path / "items").is_dir()
+    assert (base_path / "items" / "0000").is_dir()
+    assert (base_path / "items" / "0001").is_dir()
+    assert not (base_path / "items" / "0000.txt").exists()
+    assert not (base_path / "items" / "0001.txt").exists()
+
+    # Verify nested object fields
+    assert (base_path / "items" / "0000" / "priority.txt").read_text() == "1"
+    assert (base_path / "items" / "0000" / "action.txt").read_text() == "First action"
+    assert (base_path / "items" / "0000" / "details.txt").read_text() == "Some details"
+    assert (base_path / "items" / "0001" / "priority.txt").read_text() == "2"
+    assert (base_path / "items" / "0001" / "action.txt").read_text() == "Second action"
+    assert not (base_path / "items" / "0001" / "details.txt").exists()
+
+    # Verify primitive array structure
+    assert (base_path / "tags" / "0000.txt").read_text() == "tag1"
+    assert (base_path / "tags" / "0001.txt").read_text() == "tag2"
+
+
 def test_pydantic_generated_schema_with_ref_references():
     """Test that Pydantic-generated schemas with $ref references work correctly.
 
@@ -652,6 +682,10 @@ def test_pydantic_generated_schema_with_ref_references():
     were not resolved, causing arrays of nested models to be treated as arrays
     of strings.
     """
+    # Test data constants
+    num_items = 2
+    priority_first = 1
+    priority_second = 2
 
     class NestedModel(BaseModel):
         """A nested model with multiple fields."""
@@ -676,50 +710,27 @@ def test_pydantic_generated_schema_with_ref_references():
     original_data = {
         "summary": "Test summary",
         "items": [
-            {"priority": 1, "action": "First action", "details": "Some details"},
-            {"priority": 2, "action": "Second action", "details": None},
+            {"priority": priority_first, "action": "First action", "details": "Some details"},
+            {"priority": priority_second, "action": "Second action", "details": None},
         ],
         "tags": ["tag1", "tag2"],
     }
 
     with tempfile.TemporaryDirectory() as tmpdir:
         base_path = Path(tmpdir) / "data"
-
-        # Data → Filesystem
         write_structure_to_filesystem(original_data, schema, base_path)
-
-        # Verify nested object array structure (not primitive files!)
-        assert (base_path / "items").is_dir()
-        assert (base_path / "items" / "0000").is_dir()  # Should be directory, not .txt file
-        assert (base_path / "items" / "0001").is_dir()  # Should be directory, not .txt file
-        assert not (base_path / "items" / "0000.txt").exists()  # Should NOT be .txt file
-        assert not (base_path / "items" / "0001.txt").exists()  # Should NOT be .txt file
-
-        # Verify nested object fields
-        assert (base_path / "items" / "0000" / "priority.txt").read_text() == "1"
-        assert (base_path / "items" / "0000" / "action.txt").read_text() == "First action"
-        assert (base_path / "items" / "0000" / "details.txt").read_text() == "Some details"
-
-        assert (base_path / "items" / "0001" / "priority.txt").read_text() == "2"
-        assert (base_path / "items" / "0001" / "action.txt").read_text() == "Second action"
-        # details is None for second item, so file shouldn't exist
-        assert not (base_path / "items" / "0001" / "details.txt").exists()
-
-        # Verify primitive array structure (should be .txt files)
-        assert (base_path / "tags" / "0000.txt").read_text() == "tag1"
-        assert (base_path / "tags" / "0001.txt").read_text() == "tag2"
+        _verify_ref_schema_filesystem(base_path)
 
         # Filesystem → Data
         loaded_data = read_structure_from_filesystem(schema, base_path)
 
         # Verify data (note: details=None in item[1] is omitted since it's optional)
-        assert len(loaded_data["items"]) == 2
-        assert loaded_data["items"][0]["priority"] == 1
+        assert len(loaded_data["items"]) == num_items
+        assert loaded_data["items"][0]["priority"] == priority_first
         assert loaded_data["items"][0]["action"] == "First action"
         assert loaded_data["items"][0]["details"] == "Some details"
-        assert loaded_data["items"][1]["priority"] == 2
+        assert loaded_data["items"][1]["priority"] == priority_second
         assert loaded_data["items"][1]["action"] == "Second action"
-        # details is optional and None, so it's omitted from result
         assert "details" not in loaded_data["items"][1]
 
 

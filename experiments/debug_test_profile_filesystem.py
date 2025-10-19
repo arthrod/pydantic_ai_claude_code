@@ -9,12 +9,13 @@ from pydantic import BaseModel
 
 from pydantic_ai_claude_code.structure_converter import build_structure_instructions
 
+
 class Address(BaseModel):
     age: int
     city: str
 
 # Simulate Phase 2 argument collection
-def test_filesystem_creation():
+def test_filesystem_creation() -> Path:
     # Create schema for profile parameter
     schema = {
         "type": "object",
@@ -45,7 +46,7 @@ def test_filesystem_creation():
 
     # Simulate what Claude should create based on the request:
     # "profile age=30, city=London"
-    print(f"\nNow manually creating what Claude SHOULD create...")
+    print("\nNow manually creating what Claude SHOULD create...")
 
     profile_dir = temp_dir / "profile"
     profile_dir.mkdir(exist_ok=True)
@@ -56,7 +57,7 @@ def test_filesystem_creation():
     city_file = profile_dir / "city.txt"
     city_file.write_text("London")
 
-    print(f"\nCreated structure:")
+    print("\nCreated structure:")
     for item in sorted(temp_dir.rglob("*")):
         rel_path = item.relative_to(temp_dir)
         if item.is_file():
@@ -78,7 +79,9 @@ if __name__ == "__main__":
     print("TESTING READ BACK:")
     print("="*80)
 
-    from pydantic_ai_claude_code.structure_converter import read_structure_from_filesystem
+    from pydantic_ai_claude_code.structure_converter import (
+        read_structure_from_filesystem,
+    )
 
     result = read_structure_from_filesystem(
         schema={

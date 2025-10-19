@@ -21,7 +21,7 @@ def create_user(username: str, email: str, profile: Address) -> str:
     """Create a new user with username, email, and profile containing age and city."""
     return f"User created: {username} ({email}) - Profile: age={profile.age}, city={profile.city}"
 
-async def main():
+async def main() -> None:
     agent = Agent(
         "claude-code:sonnet",
         system_prompt="You are a helpful assistant.",
@@ -35,7 +35,7 @@ async def main():
     )
 
     print(f"\n{'='*80}")
-    print(f"Result: {result.data}")
+    print(f"Result: {result.output}")
     print(f"{'='*80}\n")
 
     # Check all temp directories

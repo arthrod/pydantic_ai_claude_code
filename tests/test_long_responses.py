@@ -17,7 +17,7 @@ class TestJSONAssembly:
 
     def test_assemble_scalar_fields(self):
         """Test assembling JSON with scalar fields."""
-        model = ClaudeCodeModel()
+        ClaudeCodeModel()
 
         # Create temp directory structure
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -53,7 +53,7 @@ class TestJSONAssembly:
 
     def test_assemble_array_field(self):
         """Test assembling JSON with array fields."""
-        model = ClaudeCodeModel()
+        ClaudeCodeModel()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
@@ -81,7 +81,7 @@ class TestJSONAssembly:
 
     def test_assemble_mixed_fields(self):
         """Test assembling JSON with both scalar and array fields."""
-        model = ClaudeCodeModel()
+        ClaudeCodeModel()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
@@ -119,7 +119,7 @@ class TestJSONAssembly:
 
     def test_assemble_with_multiline_content(self):
         """Test assembling JSON with multiline field content."""
-        model = ClaudeCodeModel()
+        ClaudeCodeModel()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
@@ -146,7 +146,7 @@ class TestJSONAssembly:
 
     def test_assemble_array_sorting(self):
         """Test that array items are sorted correctly by filename."""
-        model = ClaudeCodeModel()
+        ClaudeCodeModel()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
@@ -185,7 +185,7 @@ class TestJSONAssembly:
 
     def test_assemble_boolean_variations(self):
         """Test different boolean value formats."""
-        model = ClaudeCodeModel()
+        ClaudeCodeModel()
 
         test_cases = [
             ("true", True),
@@ -216,7 +216,7 @@ class TestJSONAssembly:
 
     def test_assemble_missing_field_error(self):
         """Test error when required field is missing."""
-        model = ClaudeCodeModel()
+        ClaudeCodeModel()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
@@ -240,7 +240,7 @@ class TestJSONAssembly:
 
     def test_assemble_missing_array_directory_error(self):
         """Test error when array directory is missing."""
-        model = ClaudeCodeModel()
+        ClaudeCodeModel()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
@@ -260,7 +260,7 @@ class TestJSONAssembly:
 
     def test_assemble_empty_array(self):
         """Test assembling an empty array."""
-        model = ClaudeCodeModel()
+        ClaudeCodeModel()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
@@ -282,7 +282,7 @@ class TestJSONAssembly:
 
     def test_assemble_large_array(self):
         """Test assembling a large array with many items."""
-        model = ClaudeCodeModel()
+        ClaudeCodeModel()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
@@ -307,53 +307,63 @@ class TestJSONAssembly:
             assert result["items"][0] == "item_0"
             assert result["items"][LARGE_ARRAY_SIZE - 1] == f"item_{LARGE_ARRAY_SIZE - 1}"
 
+    def _create_recommendation_item(
+        self, array_dir: Path, item_num: str, priority: int, data: tuple[list[str], str, str]
+    ) -> None:
+        """Create a single recommendation item in the filesystem.
+
+        Args:
+            array_dir: Directory containing recommendation items
+            item_num: Item number (e.g., "0000")
+            priority: Priority value
+            data: Tuple of (criteria, weakness, action)
+        """
+        criteria, weakness, action = data
+        item_dir = array_dir / item_num
+        item_dir.mkdir()
+        (item_dir / "priority.txt").write_text(str(priority))
+
+        criteria_dir = item_dir / "criteria_addressed"
+        criteria_dir.mkdir()
+        for i, criterion in enumerate(criteria):
+            (criteria_dir / f"{i:04d}.txt").write_text(criterion)
+
+        (item_dir / "current_weakness.txt").write_text(weakness)
+        (item_dir / "specific_action.txt").write_text(action)
+        (item_dir / ".complete").touch()
+
+    def _create_recommendation_filesystem(
+        self, tmp_path: Path, priority_1: int, priority_2: int, priority_3: int
+    ) -> None:
+        """Create filesystem structure for recommendation array test."""
+        array_dir = tmp_path / "recommendations"
+        array_dir.mkdir()
+
+        self._create_recommendation_item(
+            array_dir, "0000", priority_1, (["clarity", "impact"], "Lacks detail", "Add examples")
+        )
+        self._create_recommendation_item(
+            array_dir, "0001", priority_2, (["feasibility"], "Budget unclear", "Include cost breakdown")
+        )
+        self._create_recommendation_item(
+            array_dir, "0002", priority_3, (["innovation"], "Incremental improvements", "Highlight novel approach")
+        )
+
+        (tmp_path / ".complete").touch()
+
     def test_assemble_array_with_object_items(self):
         """Test assembling array with nested objects (e.g., list[BaseModel])."""
-        model = ClaudeCodeModel()
+        ClaudeCodeModel()
+
+        # Test data constants
+        expected_num_items = 3
+        priority_1 = 1
+        priority_2 = 2
+        priority_3 = 3
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
-
-            # Create array directory with object items
-            array_dir = tmp_path / "recommendations"
-            array_dir.mkdir()
-
-            # Create numbered subdirectories for each object
-            # Item 0
-            item_0 = array_dir / "0000"
-            item_0.mkdir()
-            (item_0 / "priority.txt").write_text("1")
-            criteria_0 = item_0 / "criteria_addressed"
-            criteria_0.mkdir()
-            (criteria_0 / "0000.txt").write_text("clarity")
-            (criteria_0 / "0001.txt").write_text("impact")
-            (item_0 / "current_weakness.txt").write_text("Lacks detail")
-            (item_0 / "specific_action.txt").write_text("Add examples")
-            (item_0 / ".complete").touch()
-
-            # Item 1
-            item_1 = array_dir / "0001"
-            item_1.mkdir()
-            (item_1 / "priority.txt").write_text("2")
-            criteria_1 = item_1 / "criteria_addressed"
-            criteria_1.mkdir()
-            (criteria_1 / "0000.txt").write_text("feasibility")
-            (item_1 / "current_weakness.txt").write_text("Budget unclear")
-            (item_1 / "specific_action.txt").write_text("Include cost breakdown")
-            (item_1 / ".complete").touch()
-
-            # Item 2
-            item_2 = array_dir / "0002"
-            item_2.mkdir()
-            (item_2 / "priority.txt").write_text("3")
-            criteria_2 = item_2 / "criteria_addressed"
-            criteria_2.mkdir()
-            (criteria_2 / "0000.txt").write_text("innovation")
-            (item_2 / "current_weakness.txt").write_text("Incremental improvements")
-            (item_2 / "specific_action.txt").write_text("Highlight novel approach")
-            (item_2 / ".complete").touch()
-
-            (tmp_path / ".complete").touch()
+            self._create_recommendation_filesystem(tmp_path, priority_1, priority_2, priority_3)
 
             # Schema matching ImprovementRecommendation from the bug report
             schema = {
@@ -379,11 +389,11 @@ class TestJSONAssembly:
 
             # Verify structure
             assert "recommendations" in result
-            assert len(result["recommendations"]) == 3
+            assert len(result["recommendations"]) == expected_num_items
 
             # Verify first item is a dict (not a string!)
             assert isinstance(result["recommendations"][0], dict)
-            assert result["recommendations"][0]["priority"] == 1
+            assert result["recommendations"][0]["priority"] == priority_1
             assert isinstance(result["recommendations"][0]["criteria_addressed"], list)
             assert result["recommendations"][0]["criteria_addressed"] == ["clarity", "impact"]
             assert result["recommendations"][0]["current_weakness"] == "Lacks detail"
@@ -391,15 +401,15 @@ class TestJSONAssembly:
 
             # Verify second item
             assert isinstance(result["recommendations"][1], dict)
-            assert result["recommendations"][1]["priority"] == 2
+            assert result["recommendations"][1]["priority"] == priority_2
 
             # Verify third item
             assert isinstance(result["recommendations"][2], dict)
-            assert result["recommendations"][2]["priority"] == 3
+            assert result["recommendations"][2]["priority"] == priority_3
 
     def test_assemble_array_with_integer_items(self):
         """Test assembling array with integer items."""
-        model = ClaudeCodeModel()
+        ClaudeCodeModel()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
@@ -432,7 +442,7 @@ class TestJSONAssembly:
 
     def test_assemble_array_with_number_items(self):
         """Test assembling array with float items."""
-        model = ClaudeCodeModel()
+        ClaudeCodeModel()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
@@ -465,7 +475,7 @@ class TestJSONAssembly:
 
     def test_assemble_array_with_boolean_items(self):
         """Test assembling array with boolean items."""
-        model = ClaudeCodeModel()
+        ClaudeCodeModel()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)

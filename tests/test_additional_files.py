@@ -8,6 +8,7 @@ from pydantic_ai import Agent
 
 # Import to trigger registration
 import pydantic_ai_claude_code  # noqa: F401
+from pydantic_ai_claude_code.types import ClaudeCodeModelSettings
 
 # Test constants
 EXPECTED_SUBDIR_COUNT_DOUBLE = 2
@@ -27,12 +28,12 @@ def test_additional_files_basic():
         agent = Agent("claude-code:sonnet")
         result = agent.run_sync(
             "Read the file utils.py and tell me what it contains in one word.",
-            model_settings={
-                "working_directory": str(work_dir),
-                "additional_files": {
+            model_settings=ClaudeCodeModelSettings(
+                working_directory=str(work_dir),
+                additional_files={
                     "utils.py": source_file,
                 },
-            },
+            ),
         )
 
         # Verify subdirectory was created
@@ -75,14 +76,14 @@ def test_additional_files_multiple():
         agent = Agent("claude-code:sonnet")
         agent.run_sync(
             "List the files you can see.",
-            model_settings={
-                "working_directory": str(work_dir),
-                "additional_files": {
+            model_settings=ClaudeCodeModelSettings(
+                working_directory=str(work_dir),
+                additional_files={
                     "data1.txt": source1,
                     "data2.txt": source2,
                     "config.json": source3,
                 },
-            },
+            ),
         )
 
         # Verify all files were copied
@@ -105,13 +106,13 @@ def test_additional_files_with_subdirectories():
         agent = Agent("claude-code:sonnet")
         agent.run_sync(
             "What files do you see?",
-            model_settings={
-                "working_directory": str(work_dir),
-                "additional_files": {
+            model_settings=ClaudeCodeModelSettings(
+                working_directory=str(work_dir),
+                additional_files={
                     "docs/readme.md": source,
                     "data/input.txt": source,
                 },
-            },
+            ),
         )
 
         # Verify nested directories were created
@@ -133,12 +134,12 @@ def test_additional_files_source_not_found():
         with pytest.raises(FileNotFoundError) as exc_info:
             agent.run_sync(
                 "Hello",
-                model_settings={
-                    "working_directory": str(work_dir),
-                    "additional_files": {
+                model_settings=ClaudeCodeModelSettings(
+                    working_directory=str(work_dir),
+                    additional_files={
                         "file.txt": non_existent,
                     },
-                },
+                ),
             )
 
         assert "Additional file source not found" in str(exc_info.value)
@@ -157,12 +158,12 @@ def test_additional_files_source_is_directory():
         with pytest.raises(ValueError) as exc_info:
             agent.run_sync(
                 "Hello",
-                model_settings={
-                    "working_directory": str(work_dir),
-                    "additional_files": {
+                model_settings=ClaudeCodeModelSettings(
+                    working_directory=str(work_dir),
+                    additional_files={
                         "file.txt": source_dir,
                     },
-                },
+                ),
             )
 
         assert "not a file" in str(exc_info.value)
@@ -184,12 +185,12 @@ def test_additional_files_relative_path_resolution():
             agent = Agent("claude-code:sonnet")
             agent.run_sync(
                 "What do you see?",
-                model_settings={
-                    "working_directory": str(work_dir),
-                    "additional_files": {
+                model_settings=ClaudeCodeModelSettings(
+                    working_directory=str(work_dir),
+                    additional_files={
                         "test.txt": temp_file,  # Absolute path
                     },
-                },
+                ),
             )
 
             # Verify file was copied
@@ -213,12 +214,12 @@ def test_additional_files_preserves_binary():
         agent = Agent("claude-code:sonnet")
         agent.run_sync(
             "List files.",
-            model_settings={
-                "working_directory": str(work_dir),
-                "additional_files": {
+            model_settings=ClaudeCodeModelSettings(
+                working_directory=str(work_dir),
+                additional_files={
                     "data.bin": source,
                 },
-            },
+            ),
         )
 
         # Verify binary content preserved
@@ -242,19 +243,19 @@ def test_additional_files_multiple_calls_isolated():
         # First call
         agent.run_sync(
             "Read file.txt",
-            model_settings={
-                "working_directory": str(work_dir),
-                "additional_files": {"file.txt": source1},
-            },
+            model_settings=ClaudeCodeModelSettings(
+                working_directory=str(work_dir),
+                additional_files={"file.txt": source1},
+            ),
         )
 
         # Second call
         agent.run_sync(
             "Read file.txt",
-            model_settings={
-                "working_directory": str(work_dir),
-                "additional_files": {"file.txt": source2},
-            },
+            model_settings=ClaudeCodeModelSettings(
+                working_directory=str(work_dir),
+                additional_files={"file.txt": source2},
+            ),
         )
 
         # Verify each call has its own subdirectory with the correct file

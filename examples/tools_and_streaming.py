@@ -4,6 +4,8 @@ import asyncio
 
 from pydantic_ai import Agent, RunContext
 
+import pydantic_ai_claude_code  # noqa: F401 - registers the provider
+
 
 def get_weather(city: str) -> str:
     """Get the current weather for a city.
@@ -45,7 +47,7 @@ def calculate(expression: str) -> str:
         return f"Error calculating: {e}"
 
 
-async def main():
+async def main() -> None:
     """Run examples demonstrating tools and streaming."""
     # Example 1: Agent with custom tools
     print("Example 1: Custom Tool Calling")
@@ -72,11 +74,11 @@ async def main():
     print("Streaming response:\n")
     async with stream_agent.run_stream(
         "Write a short haiku about programming"
-    ) as result:
-        async for text in result.stream_text():
+    ) as stream_result:
+        async for text in stream_result.stream_text():
             print(text, end="", flush=True)
 
-    print(f"\n\nFinal usage: {result.usage()}")
+    print(f"\n\nFinal usage: {stream_result.usage()}")
 
     # Example 3: Tool calling with context
     print("\n\nExample 3: Tools with Context")

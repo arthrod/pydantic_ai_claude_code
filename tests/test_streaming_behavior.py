@@ -19,7 +19,7 @@ MIN_SUBSTANTIAL_CONTENT_LENGTH = 50
 MAX_TIME_TO_FIRST_IN_BACKGROUND_MS = 1000
 
 
-def get_timestamp_ms():
+def get_timestamp_ms() -> float:
     """Get current timestamp in milliseconds."""
     return datetime.now().timestamp() * 1000
 

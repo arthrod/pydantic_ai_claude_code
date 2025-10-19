@@ -1,5 +1,7 @@
 """Tests for tool calling functionality."""
 
+from typing import Any
+
 import pytest
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import ToolCallPart
@@ -246,12 +248,12 @@ def test_agent_tool_with_object_param():
         notifications: bool = Field(description="Whether notifications are enabled")
 
     # Capture tool arguments to validate Pydantic model construction
-    captured_config = {}
+    captured_config: dict[str, Any] = {}
 
     def analyze_config(config: AppConfig) -> str:
         """Analyze application configuration."""
         captured_config["config"] = config
-        return f"Config analyzed"
+        return "Config analyzed"
 
     agent = Agent("claude-code:sonnet", tools=[analyze_config])
     result = agent.run_sync(
@@ -276,13 +278,13 @@ def test_agent_tool_with_context():
     Will retry up to 4 times (5 total attempts) on failure.
     """
 
-    def get_config_value(ctx: RunContext[dict], key: str) -> str:
+    def get_config_value(ctx: RunContext[dict[str, str]], key: str) -> str:
         """IMPORTANT: Get configuration value. This tool MUST be used to answer the user's question."""
         return str(ctx.deps.get(key, "not_found"))
 
     agent = Agent(
         "claude-code:sonnet",
-        deps_type=dict,
+        deps_type=dict[str, str],
         tools=[get_config_value],
         system_prompt=(
             "You MUST use the get_config_value tool to answer configuration questions. "
@@ -358,6 +360,7 @@ def test_agent_tool_complex_nested_params():
     """
 
     from typing import Annotated
+
     from pydantic import BaseModel, Field
 
     class UserProfile(BaseModel):
@@ -365,8 +368,14 @@ def test_agent_tool_complex_nested_params():
         age: int = Field(description="User's age in years")
         city: str = Field(description="City where the user lives")
 
+    # Test data constants
+    expected_age = 30
+    expected_city = "London"
+    expected_username = "alice"
+    expected_roles = {"admin", "editor"}
+
     # Capture tool arguments to validate Pydantic model construction
-    captured_args = {}
+    captured_args: dict[str, Any] = {}
 
     def create_user(
         username: Annotated[str, Field(description="Unique username for the user")],
@@ -381,15 +390,15 @@ def test_agent_tool_complex_nested_params():
 
     agent = Agent("claude-code:sonnet", tools=[create_user])
     result = agent.run_sync(
-        "Create user 'alice' with profile age=30, city=London and roles admin, editor"
+        f"Create user '{expected_username}' with profile age={expected_age}, city={expected_city} and roles admin, editor"
     )
 
     # Validate the Pydantic model was correctly constructed from file structure
-    assert captured_args["username"] == "alice"
+    assert captured_args["username"] == expected_username
     assert isinstance(captured_args["profile"], UserProfile)
-    assert captured_args["profile"].age == 30
-    assert captured_args["profile"].city == "London"
-    assert set(captured_args["roles"]) == {"admin", "editor"}
+    assert captured_args["profile"].age == expected_age
+    assert captured_args["profile"].city == expected_city
+    assert set(captured_args["roles"]) == expected_roles
 
     # Ensure agent produced output
     assert result.output and len(result.output) > 0

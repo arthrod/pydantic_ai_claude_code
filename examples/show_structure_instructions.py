@@ -2,15 +2,15 @@
 
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from pydantic_ai_claude_code.structure_converter import (
     build_structure_instructions,
     read_structure_from_filesystem,
-    write_structure_to_filesystem,
 )
 
 
-def show_simple_example():
+def show_simple_example() -> None:
     """Simple schema with scalar types."""
     print("=" * 80)
     print("EXAMPLE 1: Simple Schema with Scalar Types")
@@ -31,7 +31,7 @@ def show_simple_example():
     print("\n")
 
 
-def show_array_example():
+def show_array_example() -> None:
     """Schema with arrays."""
     print("=" * 80)
     print("EXAMPLE 2: Schema with Arrays")
@@ -59,7 +59,7 @@ def show_array_example():
     print("\n")
 
 
-def show_nested_object_example():
+def show_nested_object_example() -> None:
     """Schema with nested objects."""
     print("=" * 80)
     print("EXAMPLE 3: Schema with Nested Objects")
@@ -86,7 +86,7 @@ def show_nested_object_example():
     print("\n")
 
 
-def show_array_of_objects_example():
+def show_array_of_objects_example() -> None:
     """Schema with array of objects."""
     print("=" * 80)
     print("EXAMPLE 4: Schema with Array of Objects (e.g., Function Arguments)")
@@ -117,7 +117,7 @@ def show_array_of_objects_example():
     print("\n")
 
 
-def show_complex_nested_example():
+def show_complex_nested_example() -> None:
     """Complex deeply nested schema."""
     print("=" * 80)
     print("EXAMPLE 5: Complex Deeply Nested Schema")
@@ -156,7 +156,99 @@ def show_complex_nested_example():
     print("\n")
 
 
-def show_validation_errors():
+def _demo_error_missing_completion(tmpdir: str, schema: dict[str, Any]) -> None:
+    """Demonstrate error when completion marker is missing."""
+    print("ERROR CASE 1: Missing completion marker")
+    print("-" * 80)
+    base_path = Path(tmpdir) / "test1"
+    base_path.mkdir()
+    (base_path / "name.txt").write_text("Alice")
+    (base_path / "age.txt").write_text("30")
+
+    try:
+        read_structure_from_filesystem(schema, base_path)
+    except RuntimeError as e:
+        print(f"Error message:\n{e}\n")
+
+
+def _demo_error_missing_field(tmpdir: str, schema: dict[str, Any]) -> None:
+    """Demonstrate error when required field is missing."""
+    print("ERROR CASE 2: Missing required field 'age'")
+    print("-" * 80)
+    base_path = Path(tmpdir) / "test2"
+    base_path.mkdir()
+    (base_path / "name.txt").write_text("Bob")
+    (base_path / ".complete").touch()
+
+    try:
+        read_structure_from_filesystem(schema, base_path)
+    except RuntimeError as e:
+        print(f"Error message:\n{e}\n")
+
+
+def _demo_error_invalid_type(tmpdir: str, schema: dict[str, Any]) -> None:
+    """Demonstrate error when field has invalid type."""
+    print("ERROR CASE 3: Invalid type (text instead of number)")
+    print("-" * 80)
+    base_path = Path(tmpdir) / "test3"
+    base_path.mkdir()
+    (base_path / "name.txt").write_text("Carol")
+    (base_path / "age.txt").write_text("thirty")
+    (base_path / ".complete").touch()
+
+    try:
+        read_structure_from_filesystem(schema, base_path)
+    except (RuntimeError, ValueError) as e:
+        print(f"Error message:\n{e}\n")
+
+
+def _demo_error_missing_array_dir(tmpdir: str, schema: dict[str, Any]) -> None:
+    """Demonstrate error when array directory is missing."""
+    print("ERROR CASE 4: Missing directory for collection 'tags'")
+    print("-" * 80)
+    base_path = Path(tmpdir) / "test4"
+    base_path.mkdir()
+    (base_path / "name.txt").write_text("David")
+    (base_path / "age.txt").write_text("25")
+    (base_path / ".complete").touch()
+
+    try:
+        read_structure_from_filesystem(schema, base_path)
+    except RuntimeError as e:
+        print(f"Error message:\n{e}\n")
+
+
+def _demo_error_file_instead_of_dir(tmpdir: str) -> None:
+    """Demonstrate error when file is created instead of directory for object."""
+    print("ERROR CASE 5: Created file instead of directory for nested group")
+    print("-" * 80)
+    schema_with_object = {
+        "properties": {
+            "title": {"type": "string"},
+            "author": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "email": {"type": "string"},
+                },
+            },
+        },
+        "required": ["title"],
+    }
+
+    base_path = Path(tmpdir) / "test5"
+    base_path.mkdir()
+    (base_path / "title.txt").write_text("Book Title")
+    (base_path / "author.txt").write_text("John Doe")
+    (base_path / ".complete").touch()
+
+    try:
+        read_structure_from_filesystem(schema_with_object, base_path)
+    except RuntimeError as e:
+        print(f"Error message:\n{e}\n")
+
+
+def show_validation_errors() -> None:
     """Show error messages Claude would receive for invalid structures."""
     print("=" * 80)
     print("EXAMPLE 6: Validation Error Feedback")
@@ -176,90 +268,11 @@ def show_validation_errors():
     }
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Error 1: Missing completion marker
-        print("ERROR CASE 1: Missing completion marker")
-        print("-" * 80)
-        base_path = Path(tmpdir) / "test1"
-        base_path.mkdir()
-        (base_path / "name.txt").write_text("Alice")
-        (base_path / "age.txt").write_text("30")
-        # Forgot to create .complete marker
-
-        try:
-            read_structure_from_filesystem(schema, base_path)
-        except RuntimeError as e:
-            print(f"Error message:\n{e}\n")
-
-        # Error 2: Missing required field
-        print("ERROR CASE 2: Missing required field 'age'")
-        print("-" * 80)
-        base_path = Path(tmpdir) / "test2"
-        base_path.mkdir()
-        (base_path / "name.txt").write_text("Bob")
-        # Missing age.txt
-        (base_path / ".complete").touch()
-
-        try:
-            read_structure_from_filesystem(schema, base_path)
-        except RuntimeError as e:
-            print(f"Error message:\n{e}\n")
-
-        # Error 3: Invalid type (text instead of number)
-        print("ERROR CASE 3: Invalid type (text instead of number)")
-        print("-" * 80)
-        base_path = Path(tmpdir) / "test3"
-        base_path.mkdir()
-        (base_path / "name.txt").write_text("Carol")
-        (base_path / "age.txt").write_text("thirty")  # Should be a number!
-        (base_path / ".complete").touch()
-
-        try:
-            read_structure_from_filesystem(schema, base_path)
-        except (RuntimeError, ValueError) as e:
-            print(f"Error message:\n{e}\n")
-
-        # Error 4: Missing directory for array
-        print("ERROR CASE 4: Missing directory for collection 'tags'")
-        print("-" * 80)
-        base_path = Path(tmpdir) / "test4"
-        base_path.mkdir()
-        (base_path / "name.txt").write_text("David")
-        (base_path / "age.txt").write_text("25")
-        # Should create tags/ directory, but didn't
-        (base_path / ".complete").touch()
-
-        try:
-            read_structure_from_filesystem(schema, base_path)
-        except RuntimeError as e:
-            print(f"Error message:\n{e}\n")
-
-        # Error 5: Created file instead of directory for object
-        print("ERROR CASE 5: Created file instead of directory for nested group")
-        print("-" * 80)
-        schema_with_object = {
-            "properties": {
-                "title": {"type": "string"},
-                "author": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string"},
-                        "email": {"type": "string"},
-                    },
-                },
-            },
-            "required": ["title"],
-        }
-
-        base_path = Path(tmpdir) / "test5"
-        base_path.mkdir()
-        (base_path / "title.txt").write_text("Book Title")
-        (base_path / "author.txt").write_text("John Doe")  # Should be a directory!
-        (base_path / ".complete").touch()
-
-        try:
-            read_structure_from_filesystem(schema_with_object, base_path)
-        except RuntimeError as e:
-            print(f"Error message:\n{e}\n")
+        _demo_error_missing_completion(tmpdir, schema)
+        _demo_error_missing_field(tmpdir, schema)
+        _demo_error_invalid_type(tmpdir, schema)
+        _demo_error_missing_array_dir(tmpdir, schema)
+        _demo_error_file_instead_of_dir(tmpdir)
 
     print("=" * 80)
     print("KEY POINTS:")

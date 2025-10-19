@@ -15,7 +15,6 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 
 import pydantic_ai_claude_code  # noqa: F401 - Register the provider
-from pydantic_ai_claude_code import ClaudeCodeProvider
 
 # Constants for output display
 MAX_KEY_POINTS_TO_DISPLAY = 5  # Number of key points to show before truncation
@@ -32,7 +31,7 @@ class DetailedAnalysis(BaseModel):
     conclusion: str
 
 
-async def example_1_unstructured_long_response():
+async def example_1_unstructured_long_response() -> None:
     """Example 1: Generate a long unstructured response.
 
     Behind the scenes:
@@ -64,7 +63,7 @@ async def example_1_unstructured_long_response():
     print(f"\nUsage: {result.usage()}")
 
 
-async def example_2_structured_with_large_data():
+async def example_2_structured_with_large_data() -> None:
     """Example 2: Structured output with large amounts of data.
 
     Behind the scenes:
@@ -112,7 +111,7 @@ async def example_2_structured_with_large_data():
     print(f"\nUsage: {result.usage()}")
 
 
-async def example_3_streaming_long_response():
+async def example_3_streaming_long_response() -> None:
     """Example 3: Stream a long response in real-time.
 
     This provides better user experience for long-running generations.
@@ -140,7 +139,7 @@ async def example_3_streaming_long_response():
     print(f"Usage: {result.usage()}")
 
 
-async def example_4_multiple_large_arrays():
+async def example_4_multiple_large_arrays() -> None:
     """Example 4: Structured output with multiple large arrays.
 
     Demonstrates how the system handles complex structures with lots of data.
@@ -184,7 +183,7 @@ async def example_4_multiple_large_arrays():
     print(f"\nUsage: {result.usage()}")
 
 
-async def main():
+async def main() -> None:
     """Run all examples."""
     print("\n" + "=" * 70)
     print("LONG RESPONSE HANDLING EXAMPLES")

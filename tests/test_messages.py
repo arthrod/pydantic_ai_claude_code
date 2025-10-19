@@ -1,6 +1,9 @@
 """Tests for message formatting and conversion."""
 
+import tempfile
+
 from pydantic_ai.messages import (
+    ModelMessage,
     ModelRequest,
     ModelResponse,
     SystemPromptPart,
@@ -22,7 +25,7 @@ EXPECTED_ASSISTANT_MESSAGES = 2  # Number of assistant messages in full conversa
 
 def test_format_system_prompt():
     """Test that system prompt is prepended."""
-    messages = [
+    messages: list[ModelMessage] = [
         ModelRequest(
             parts=[
                 SystemPromptPart(content="You are a helpful assistant."),
@@ -31,34 +34,34 @@ def test_format_system_prompt():
         ),
     ]
 
-    formatted, additional_files = format_messages_for_claude(messages)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        formatted = format_messages_for_claude(messages, working_dir=tmpdir)
 
-    assert "System: You are a helpful assistant." in formatted
-    assert "Request: What is 2+2?" in formatted
-    # System should come before Request
-    assert formatted.index("System:") < formatted.index("Request:")
-    assert additional_files == {}  # No tool results
+        assert "System: You are a helpful assistant." in formatted
+        assert "Request: What is 2+2?" in formatted
+        # System should come before Request
+        assert formatted.index("System:") < formatted.index("Request:")
 
 
 def test_format_conversation():
     """Test formatting a multi-turn conversation."""
-    messages = [
+    messages: list[ModelMessage] = [
         ModelRequest(parts=[UserPromptPart(content="What is 2+2?")]),
         ModelResponse(parts=[TextPart(content="4")]),
         ModelRequest(parts=[UserPromptPart(content="What about 3+3?")]),
     ]
 
-    formatted, additional_files = format_messages_for_claude(messages)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        formatted = format_messages_for_claude(messages, working_dir=tmpdir)
 
-    assert "Request: What is 2+2?" in formatted
-    assert "Assistant: 4" in formatted
-    assert "Request: What about 3+3?" in formatted
-    assert additional_files == {}  # No tool results
+        assert "Request: What is 2+2?" in formatted
+        assert "Assistant: 4" in formatted
+        assert "Request: What about 3+3?" in formatted
 
 
 def test_format_tool_call():
     """Test formatting tool calls - tool calls are skipped in history."""
-    messages = [
+    messages: list[ModelMessage] = [
         ModelResponse(
             parts=[
                 ToolCallPart(
@@ -70,17 +73,17 @@ def test_format_tool_call():
         ),
     ]
 
-    formatted, additional_files = format_messages_for_claude(messages)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        formatted = format_messages_for_claude(messages, working_dir=tmpdir)
 
-    # Tool calls are not included in conversation history
-    # (only tool results are shown as "Context: ...")
-    assert "calculator" not in formatted or formatted == ""
-    assert additional_files == {}  # No tool results
+        # Tool calls are not included in conversation history
+        # (only tool results are shown as "Context: ...")
+        assert "calculator" not in formatted or formatted == ""
 
 
 def test_format_tool_return():
     """Test formatting tool returns - results should be written to files."""
-    messages = [
+    messages: list[ModelMessage] = [
         ModelRequest(
             parts=[
                 ToolReturnPart(
@@ -92,24 +95,18 @@ def test_format_tool_return():
         ),
     ]
 
-    formatted, additional_files = format_messages_for_claude(messages)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        formatted = format_messages_for_claude(messages, working_dir=tmpdir)
 
-    # Should reference the file instead of embedding content
-    assert "tool_result_1_calculator.txt" in formatted
-    assert "Additional Information" in formatted
-    assert "calculator tool" in formatted
+        # Should reference the file instead of embedding content
+        assert "tool_result_1_calculator.txt" in formatted
+        assert "Additional Information" in formatted
+        assert "calculator tool" in formatted
 
-    # Should have created one additional file
-    assert len(additional_files) == 1
-    assert "tool_result_1_calculator.txt" in additional_files
-
-    # Verify file content
-    tool_file = additional_files["tool_result_1_calculator.txt"]
-    assert tool_file.exists()
-    assert tool_file.read_text() == "4"
-
-    # Clean up temp file
-    tool_file.unlink()
+        # Verify file was created in working directory
+        tool_file = f"{tmpdir}/tool_result_1_calculator.txt"
+        with open(tool_file, encoding="utf-8") as f:
+            assert f.read() == "4"
 
 
 def test_build_conversation_context_empty():
@@ -122,7 +119,7 @@ def test_build_conversation_context_empty():
 
 def test_build_conversation_context_with_system():
     """Test building context with system prompt."""
-    messages = [
+    messages: list[ModelMessage] = [
         ModelRequest(
             parts=[
                 SystemPromptPart(content="You are helpful."),
@@ -139,7 +136,7 @@ def test_build_conversation_context_with_system():
 
 def test_build_conversation_context_full():
     """Test building context from complex conversation."""
-    messages = [
+    messages: list[ModelMessage] = [
         ModelRequest(parts=[UserPromptPart(content="Test 1")]),
         ModelResponse(
             parts=[

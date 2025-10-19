@@ -3,7 +3,7 @@
 from pydantic_ai import Agent
 
 
-def main():
+def main() -> None:
     """Run basic examples."""
     # Example 1: Simple text query (using string format - simplest!)
     print("Example 1: Simple Query")

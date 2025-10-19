@@ -2,12 +2,10 @@
 
 from __future__ import annotations as _annotations
 
-import contextlib
 import json
 import logging
-import uuid
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,14 +28,24 @@ from pydantic_ai.usage import RequestUsage
 
 from .messages import format_messages_for_claude
 from .provider import ClaudeCodeProvider
+from .response_utils import (
+    create_tool_call_part,
+    get_working_directory,
+)
 from .streamed_response import ClaudeCodeStreamedResponse
 from .streaming import run_claude_streaming
 from .structure_converter import (
     build_structure_instructions,
     read_structure_from_filesystem,
 )
+from .temp_path_utils import generate_output_file_path, generate_temp_directory_path
 from .types import ClaudeCodeSettings, ClaudeJSONResponse
-from .utils import build_claude_command, run_claude_async
+from .utils import (
+    _determine_working_directory,
+    build_claude_command,
+    run_claude_async,
+    strip_markdown_code_fence,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +100,11 @@ class ClaudeCodeModel(Model):
         Returns:
             Instruction string to append to system prompt
         """
-        # Generate unique filename for unstructured output
-        output_filename = f"/tmp/claude_unstructured_output_{uuid.uuid4().hex}.txt"
+        # Generate unique filename for unstructured output in working directory
+        working_dir = get_working_directory(settings)
+        output_filename = generate_output_file_path(
+            working_dir, "claude_unstructured_output", ".txt"
+        )
         settings["__unstructured_output_file"] = output_filename
 
         logger.debug("Unstructured output file path: %s", output_filename)
@@ -137,14 +148,19 @@ class ClaudeCodeModel(Model):
         """
         schema = output_tool.parameters_json_schema
 
-        # Generate unique filename for structured output
-        output_filename = f"/tmp/claude_structured_output_{uuid.uuid4().hex}.json"
+        # Generate unique filename for structured output in working directory
+        working_dir = get_working_directory(settings)
+        output_filename = generate_output_file_path(
+            working_dir, "claude_structured_output", ".json"
+        )
         settings["__structured_output_file"] = output_filename
 
         logger.debug("Structured output file path: %s", output_filename)
 
-        # Generate unique temp dir for field data
-        temp_data_dir = f"/tmp/claude_data_structure_{uuid.uuid4().hex[:8]}"
+        # Generate unique temp dir for field data in working directory
+        temp_data_dir = generate_temp_directory_path(
+            working_dir, "claude_data_structure", short_id=True
+        )
         settings["__temp_json_dir"] = temp_data_dir
 
         # Use new structure converter to build instructions
@@ -333,26 +349,13 @@ CHOICE: none
         Returns:
             Final assembled prompt string
         """
-        prompt, tool_result_files = format_messages_for_claude(
-            messages, skip_system_prompt=has_tool_results
+        # Get working directory from settings for tool result files
+        working_dir = settings.get("__working_directory", "/tmp")
+
+        prompt = format_messages_for_claude(
+            messages, skip_system_prompt=has_tool_results, working_dir=working_dir
         )
         logger.debug("Formatted prompt length: %d chars", len(prompt))
-
-        # Merge tool result files into settings' additional_files
-        if tool_result_files:
-            existing_files = settings.get("additional_files", {})
-            if existing_files:
-                # Merge: tool results take precedence in case of filename conflicts
-                merged_files = {**existing_files, **tool_result_files}
-                settings["additional_files"] = merged_files
-                logger.debug(
-                    "Merged %d tool result files with %d existing additional files",
-                    len(tool_result_files),
-                    len(existing_files)
-                )
-            else:
-                settings["additional_files"] = tool_result_files
-                logger.debug("Added %d tool result files to settings", len(tool_result_files))
 
         # Prepend system instructions
         if system_prompt_parts:
@@ -468,13 +471,20 @@ CHOICE: none
         Returns:
             Retry prompt string
         """
-        # Generate new temp directory for retry
-        temp_data_dir = f"/tmp/claude_data_structure_{uuid.uuid4().hex[:8]}"
+        # Generate new temp directory for retry in working directory
+        working_dir = arg_settings.get("__working_directory", "/tmp")
+        temp_data_dir = generate_temp_directory_path(
+            working_dir, "claude_data_structure", short_id=True
+        )
         arg_settings["__temp_json_dir"] = temp_data_dir
 
-        # Rebuild instruction with new temp directory
+        # Extract tool name and description from settings (stored during initial setup)
+        tool_name: str | None = arg_settings.get("__tool_name")
+        tool_description: str | None = arg_settings.get("__tool_description")
+
+        # Rebuild instruction with new temp directory and function context
         instruction = self._build_argument_collection_instruction(
-            schema, arg_settings
+            schema, arg_settings, tool_name, tool_description
         )
 
         retry_instruction = f"""
@@ -483,15 +493,9 @@ PREVIOUS ATTEMPT HAD ERRORS:
 
 Please fix the issues above and try again. Follow the directory structure instructions carefully."""
 
-        messages_prompt, tool_result_files = format_messages_for_claude(messages, skip_system_prompt=True)
-
-        # Merge tool result files into arg_settings
-        if tool_result_files:
-            existing_files = arg_settings.get("additional_files", {})
-            if existing_files:
-                arg_settings["additional_files"] = {**existing_files, **tool_result_files}
-            else:
-                arg_settings["additional_files"] = tool_result_files
+        messages_prompt = format_messages_for_claude(
+            messages, skip_system_prompt=True, working_dir=working_dir
+        )
 
         return f"{instruction}\n\n{messages_prompt}\n\n{retry_instruction}"
 
@@ -529,10 +533,9 @@ Please fix the issues above and try again. Follow the directory structure instru
                     selected_function,
                     parsed_args,
                 )
-                tool_call = ToolCallPart(
+                tool_call = create_tool_call_part(
                     tool_name=str(selected_function),
                     args=parsed_args,
-                    tool_call_id=f"call_{uuid.uuid4().hex[:16]}",
                 )
                 return (
                     self._create_model_response_with_usage(arg_response, [tool_call]),
@@ -582,17 +585,22 @@ Please fix the issues above and try again. Follow the directory structure instru
         arg_settings = self.provider.get_settings(model=self._model_name)
         schema = tool_def.parameters_json_schema
 
-        # Build initial prompt
-        instruction = self._build_argument_collection_instruction(schema, arg_settings)
-        arg_prompt, tool_result_files = format_messages_for_claude(messages, skip_system_prompt=True)
+        # Store tool name and description for retry attempts
+        arg_settings["__tool_name"] = tool_def.name
+        arg_settings["__tool_description"] = tool_def.description
 
-        # Merge tool result files into arg_settings
-        if tool_result_files:
-            existing_files = arg_settings.get("additional_files", {})
-            if existing_files:
-                arg_settings["additional_files"] = {**existing_files, **tool_result_files}
-            else:
-                arg_settings["additional_files"] = tool_result_files
+        # Determine working directory early for argument collection
+        working_dir = _determine_working_directory(arg_settings)
+        arg_settings["__working_directory"] = working_dir
+
+        # Build initial prompt with function context
+        instruction = self._build_argument_collection_instruction(
+            schema, arg_settings, tool_def.name, tool_def.description
+        )
+        arg_prompt = format_messages_for_claude(
+            messages, skip_system_prompt=True, working_dir=working_dir
+        )
+
         arg_prompt = f"{instruction}\n\n{arg_prompt}"
 
         existing_prompt = arg_settings.get("append_system_prompt")
@@ -741,7 +749,11 @@ Please fix the issues above and try again. Follow the directory structure instru
         return response
 
     def _build_argument_collection_instruction(
-        self, schema: dict[str, Any], settings: ClaudeCodeSettings
+        self,
+        schema: dict[str, Any],
+        settings: ClaudeCodeSettings,
+        tool_name: str | None = None,
+        tool_description: str | None = None,
     ) -> str:
         """Build instruction for argument collection using file/folder structure.
 
@@ -750,21 +762,30 @@ Please fix the issues above and try again. Follow the directory structure instru
         Args:
             schema: JSON schema for function parameters
             settings: Settings dict to store file paths
+            tool_name: Name of the function/tool
+            tool_description: Description of what the function does
 
         Returns:
             Instruction string with file/folder structure
         """
-        # Generate unique filename and temp dir (same as structured output)
-        output_filename = f"/tmp/claude_structured_output_{uuid.uuid4().hex}.json"
+        # Generate unique filename and temp dir (same as structured output) in working directory
+        working_dir = settings.get("__working_directory", "/tmp")
+        output_filename = generate_output_file_path(
+            working_dir, "claude_structured_output", ".json"
+        )
         settings["__structured_output_file"] = output_filename
 
-        temp_data_dir = f"/tmp/claude_data_structure_{uuid.uuid4().hex[:8]}"
+        temp_data_dir = generate_temp_directory_path(
+            working_dir, "claude_data_structure", short_id=True
+        )
         settings["__temp_json_dir"] = temp_data_dir
 
         logger.debug("Argument collection will use temp directory: %s", temp_data_dir)
 
-        # Use new structure converter to build instructions
-        return build_structure_instructions(schema, temp_data_dir)
+        # Use new structure converter to build instructions with function context
+        return build_structure_instructions(
+            schema, temp_data_dir, tool_name, tool_description
+        )
 
     async def request(
         self,
@@ -798,6 +819,12 @@ Please fix the issues above and try again. Follow the directory structure instru
         if model_settings:
             # Merge model_settings into provider settings (model_settings takes precedence)
             settings.update(model_settings)  # type: ignore[typeddict-item]
+
+        # Determine working directory early so prompt building can use it
+        working_dir = _determine_working_directory(settings)
+        settings["__working_directory"] = working_dir
+        logger.debug("Pre-determined working directory: %s", working_dir)
+
         output_tools = (
             model_request_parameters.output_tools if model_request_parameters else []
         )
@@ -896,6 +923,12 @@ Please fix the issues above and try again. Follow the directory structure instru
         if model_settings:
             # Merge model_settings into provider settings (model_settings takes precedence)
             settings.update(model_settings)  # type: ignore[typeddict-item]
+
+        # Determine working directory early so prompt building can use it
+        working_dir = _determine_working_directory(settings)
+        settings["__working_directory"] = working_dir
+        logger.debug("Pre-determined working directory: %s", working_dir)
+
         output_tools = (
             model_request_parameters.output_tools if model_request_parameters else []
         )
@@ -1099,10 +1132,9 @@ Then provide your complete response after the marker.
                 if parsed_data:
                     # Validation passed, create tool call
                     logger.debug("Successfully created structured output from file")
-                    tool_call = ToolCallPart(
+                    tool_call = create_tool_call_part(
                         tool_name=tool_name,
                         args=parsed_data,
-                        tool_call_id=f"call_{uuid.uuid4().hex[:16]}",
                     )
                     return self._create_model_response_with_usage(response, [tool_call])
 
@@ -1111,10 +1143,9 @@ Then provide your complete response after the marker.
                     "Structured output file not found, using fallback JSON extraction"
                 )
                 parsed_data = self._extract_json_robust(result_text, schema)
-                tool_call = ToolCallPart(
+                tool_call = create_tool_call_part(
                     tool_name=tool_name,
                     args=parsed_data,
-                    tool_call_id=f"call_{uuid.uuid4().hex[:16]}",
                 )
                 return self._create_model_response_with_usage(response, [tool_call])
 
@@ -1123,10 +1154,9 @@ Then provide your complete response after the marker.
                 "No structured output file configured, using robust JSON extraction"
             )
             parsed_data = self._extract_json_robust(result_text, schema)
-            tool_call = ToolCallPart(
+            tool_call = create_tool_call_part(
                 tool_name=tool_name,
                 args=parsed_data,
-                tool_call_id=f"call_{uuid.uuid4().hex[:16]}",
             )
             return self._create_model_response_with_usage(response, [tool_call])
 
@@ -1240,7 +1270,7 @@ Then provide your complete response after the marker.
         Args:
             file_path: Path to file to remove
         """
-        with contextlib.suppress(Exception):
+        with suppress(Exception):
             Path(file_path).unlink()
 
     def _validate_json_schema(
@@ -1291,16 +1321,6 @@ Then provide your complete response after the marker.
                     return f"The value for '{field_name}' should be a {expected_type}, but it's a {type(actual_value).__name__}\nCurrent content: {json.dumps(data)}"
 
         return None
-
-    def _cleanup_temp_directory(self, temp_path: Path) -> None:
-        """Clean up temporary directory.
-
-        Args:
-            temp_path: Path to temporary directory to remove
-        """
-        import shutil
-
-        shutil.rmtree(temp_path, ignore_errors=True)
 
     def _try_read_directory_structure(
         self,
@@ -1425,18 +1445,8 @@ Then provide your complete response after the marker.
         Returns:
             Parsed JSON dict if successful, None otherwise
         """
-        cleaned = text.strip()
-
         # Remove markdown code blocks (```json or ```)
-        if cleaned.startswith("```json"):
-            cleaned = cleaned[7:]
-        elif cleaned.startswith("```"):
-            cleaned = cleaned[3:]
-
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-
-        cleaned = cleaned.strip()
+        cleaned = strip_markdown_code_fence(text)
 
         try:
             parsed = json.loads(cleaned)

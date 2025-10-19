@@ -15,7 +15,7 @@ class Summary(BaseModel):
     word_count: int
 
 
-async def main():
+async def main() -> None:
     """Run async examples."""
     model = ClaudeCodeModel("sonnet")
 

@@ -8,8 +8,10 @@ from pathlib import Path
 
 from pydantic_ai import Agent
 
+from pydantic_ai_claude_code.types import ClaudeCodeModelSettings
 
-def main():
+
+def main() -> None:
     """Demonstrate additional_files feature."""
 
     # Create some example source files
@@ -55,11 +57,11 @@ def calculate_product(a: int, b: int) -> int:
 
         result = agent.run_sync(
             "Read utils.py and list all the function names you find.",
-            model_settings={
-                "additional_files": {
+            model_settings=ClaudeCodeModelSettings(
+                additional_files={
                     "utils.py": code_file,
                 }
-            },
+            ),
         )
         print(f"Response: {result.output}\n")
 
@@ -70,12 +72,12 @@ def calculate_product(a: int, b: int) -> int:
         result = agent.run_sync(
             "Read both README.md and utils.py. "
             "Tell me if the README accurately describes what the code does.",
-            model_settings={
-                "additional_files": {
+            model_settings=ClaudeCodeModelSettings(
+                additional_files={
                     "README.md": readme_file,
                     "utils.py": code_file,
                 }
-            },
+            ),
         )
         print(f"Response: {result.output}\n")
 
@@ -85,12 +87,12 @@ def calculate_product(a: int, b: int) -> int:
 
         result = agent.run_sync(
             "List all files you can see and their locations.",
-            model_settings={
-                "additional_files": {
+            model_settings=ClaudeCodeModelSettings(
+                additional_files={
                     "docs/README.md": readme_file,
                     "src/utils.py": code_file,
                 }
-            },
+            ),
         )
         print(f"Response: {result.output}\n")
 

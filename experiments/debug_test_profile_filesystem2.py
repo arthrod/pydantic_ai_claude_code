@@ -4,6 +4,7 @@
 import json
 import uuid
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -12,12 +13,13 @@ from pydantic_ai_claude_code.structure_converter import (
     read_structure_from_filesystem,
 )
 
+
 class Address(BaseModel):
     age: int
     city: str
 
 # Simulate Phase 2 argument collection with FULL function schema
-def test_filesystem_creation():
+def test_filesystem_creation() -> tuple[Path, dict[str, Any]]:
     # This is the FULL schema for create_user function (all parameters)
     schema = {
         "type": "object",
@@ -56,7 +58,7 @@ def test_filesystem_creation():
 
     # Simulate what Claude SHOULD create based on the request:
     # "Create a user with username john_doe, email john@example.com, profile age=30, city=London"
-    print(f"\nNow manually creating what Claude SHOULD create...")
+    print("\nNow manually creating what Claude SHOULD create...")
 
     # Create username file
     username_file = temp_dir / "username.txt"
@@ -76,7 +78,7 @@ def test_filesystem_creation():
     city_file = profile_dir / "city.txt"
     city_file.write_text("London")
 
-    print(f"\nCreated structure:")
+    print("\nCreated structure:")
     for item in sorted(temp_dir.rglob("*")):
         rel_path = item.relative_to(temp_dir)
         if item.is_file():
@@ -104,9 +106,9 @@ if __name__ == "__main__":
     )
 
     print(f"Read result: {json.dumps(result, indent=2)}")
-    print(f"\nThis matches the function signature:")
-    print(f"  create_user(")
+    print("\nThis matches the function signature:")
+    print("  create_user(")
     print(f"    username={result.get('username')!r},")
     print(f"    email={result.get('email')!r},")
     print(f"    profile={result.get('profile')!r}")
-    print(f"  )")
+    print("  )")
