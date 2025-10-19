@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.7.0] - 2025-10-19
 
+## [0.7.0] - 2025-10-19
+
 ### Changed
 - **Working directory improvements**: Consolidated all temporary files to use working directory instead of /tmp
   - Working directory is now pre-determined early in the request flow for consistent usage
