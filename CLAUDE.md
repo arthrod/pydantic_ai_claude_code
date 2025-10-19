@@ -369,6 +369,11 @@ Log levels used:
    - Increase timeout via `ClaudeCodeSettings`: `{"timeout_seconds": 1800}` for 30 minutes
    - Consider breaking large tasks into smaller chunks
    - Check logs for detailed timing information at ERROR level
+11. **OAuth/Authentication errors**: If you get `ClaudeOAuthError` during long-running sessions:
+   - OAuth tokens expire after ~7 hours
+   - Error message will indicate "OAuth token revoked" or similar
+   - Run `/login` in your terminal to re-authenticate
+   - Consider implementing retry logic for long-running batch processes (see example below)
 
 ## Usage Examples for Advanced Configuration
 
@@ -439,3 +444,70 @@ export CLAUDE_CLI_PATH=/opt/custom/claude
 # Then use normally in Python
 python your_script.py
 ```
+
+### Handling OAuth Token Expiration in Long-Running Sessions
+
+For processes that run longer than the OAuth token lifetime (~7 hours), implement graceful error handling:
+
+```python
+from pydantic_ai import Agent
+from pydantic_ai_claude_code import ClaudeCodeProvider, ClaudeOAuthError
+import time
+
+provider = ClaudeCodeProvider({"model": "sonnet"})
+agent = Agent("claude-code:sonnet", provider=provider)
+
+def process_with_oauth_retry(data_items, max_retries=3):
+    """Process items with OAuth error handling and retry logic.
+
+    This example shows how to handle token expiration during long-running
+    batch processes (e.g., processing multiple documents over several hours).
+    """
+    results = []
+
+    for item in data_items:
+        retries = 0
+        while retries < max_retries:
+            try:
+                # Process the item (may take 30-40 minutes)
+                result = agent.run_sync(f"Analyze this item: {item}")
+                results.append(result.data)
+                break  # Success - move to next item
+
+            except ClaudeOAuthError as e:
+                # OAuth token expired - prompt user to re-authenticate
+                print(f"\n{'='*60}")
+                print(f"Authentication Error: {e}")
+                print(f"Action Required: {e.reauth_instruction}")
+                print(f"{'='*60}\n")
+
+                # Wait for user to re-authenticate
+                input("Please run '/login' in your terminal, then press Enter to continue...")
+
+                retries += 1
+                if retries >= max_retries:
+                    print(f"Failed to process item after {max_retries} auth attempts")
+                    raise
+
+                print(f"Retrying (attempt {retries + 1}/{max_retries})...")
+                time.sleep(2)  # Brief pause before retry
+
+            except Exception as e:
+                # Other errors - don't retry
+                print(f"Error processing item: {e}")
+                raise
+
+    return results
+
+# Example: Process 9 documents that take 6-7 hours total
+documents = ["doc1.txt", "doc2.txt", ..., "doc9.txt"]
+results = process_with_oauth_retry(documents)
+```
+
+**Key points for OAuth error handling:**
+
+- `ClaudeOAuthError` is raised when the OAuth token expires or is revoked
+- The exception includes `reauth_instruction` attribute with user-facing guidance
+- Token lifetime is approximately 7 hours of active use
+- For non-interactive/automated processes, consider scheduling shorter batches
+- The error message always includes the actual error from Claude CLI for debugging

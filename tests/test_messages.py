@@ -31,12 +31,13 @@ def test_format_system_prompt():
         ),
     ]
 
-    formatted = format_messages_for_claude(messages)
+    formatted, additional_files = format_messages_for_claude(messages)
 
     assert "System: You are a helpful assistant." in formatted
     assert "Request: What is 2+2?" in formatted
     # System should come before Request
     assert formatted.index("System:") < formatted.index("Request:")
+    assert additional_files == {}  # No tool results
 
 
 def test_format_conversation():
@@ -47,11 +48,12 @@ def test_format_conversation():
         ModelRequest(parts=[UserPromptPart(content="What about 3+3?")]),
     ]
 
-    formatted = format_messages_for_claude(messages)
+    formatted, additional_files = format_messages_for_claude(messages)
 
     assert "Request: What is 2+2?" in formatted
     assert "Assistant: 4" in formatted
     assert "Request: What about 3+3?" in formatted
+    assert additional_files == {}  # No tool results
 
 
 def test_format_tool_call():
@@ -68,15 +70,16 @@ def test_format_tool_call():
         ),
     ]
 
-    formatted = format_messages_for_claude(messages)
+    formatted, additional_files = format_messages_for_claude(messages)
 
     # Tool calls are not included in conversation history
     # (only tool results are shown as "Context: ...")
     assert "calculator" not in formatted or formatted == ""
+    assert additional_files == {}  # No tool results
 
 
 def test_format_tool_return():
-    """Test formatting tool returns."""
+    """Test formatting tool returns - results should be written to files."""
     messages = [
         ModelRequest(
             parts=[
@@ -89,9 +92,24 @@ def test_format_tool_return():
         ),
     ]
 
-    formatted = format_messages_for_claude(messages)
+    formatted, additional_files = format_messages_for_claude(messages)
 
-    assert "Additional Information (from calculator): 4" in formatted
+    # Should reference the file instead of embedding content
+    assert "tool_result_1_calculator.txt" in formatted
+    assert "Additional Information" in formatted
+    assert "calculator tool" in formatted
+
+    # Should have created one additional file
+    assert len(additional_files) == 1
+    assert "tool_result_1_calculator.txt" in additional_files
+
+    # Verify file content
+    tool_file = additional_files["tool_result_1_calculator.txt"]
+    assert tool_file.exists()
+    assert tool_file.read_text() == "4"
+
+    # Clean up temp file
+    tool_file.unlink()
 
 
 def test_build_conversation_context_empty():

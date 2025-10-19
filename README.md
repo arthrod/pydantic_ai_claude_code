@@ -157,11 +157,68 @@ result = agent.run_sync(
 ```
 
 Files are copied into the working directory before execution, and Claude can reference them directly:
+
 - `"Read utils.py"`
 - `"Read config.json"`
 - `"Read docs/spec.md"`
 
 Each execution gets its own numbered subdirectory with isolated file copies.
+
+### Error Handling
+
+#### OAuth Token Expiration
+
+For long-running processes (>7 hours), OAuth tokens may expire. Handle gracefully with `ClaudeOAuthError`:
+
+```python
+from pydantic_ai import Agent
+from pydantic_ai_claude_code import ClaudeOAuthError
+
+agent = Agent('claude-code:sonnet')
+
+try:
+    result = agent.run_sync("Process large dataset")
+except ClaudeOAuthError as e:
+    print(f"Authentication expired: {e}")
+    print(f"Please run: {e.reauth_instruction}")  # "Please run /login"
+    # Prompt user to re-authenticate, then retry
+except RuntimeError as e:
+    # Handle other CLI errors
+    print(f"CLI error: {e}")
+```
+
+**For batch processing with automatic retry:**
+
+```python
+from pydantic_ai_claude_code import ClaudeOAuthError
+import time
+
+def process_batch_with_retry(items, max_auth_retries=3):
+    """Process items with OAuth re-authentication support."""
+    results = []
+
+    for item in items:
+        auth_retries = 0
+        while auth_retries < max_auth_retries:
+            try:
+                result = agent.run_sync(f"Process: {item}")
+                results.append(result.output)
+                break  # Success
+
+            except ClaudeOAuthError as e:
+                auth_retries += 1
+                print(f"\n{'='*60}")
+                print(f"OAuth token expired: {e.reauth_instruction}")
+                print(f"{'='*60}\n")
+
+                if auth_retries >= max_auth_retries:
+                    raise  # Give up after max retries
+
+                input("Press Enter after running /login to continue...")
+                time.sleep(2)  # Brief pause before retry
+
+    return results
+```
 
 ### Logging
 
@@ -180,6 +237,7 @@ logging.getLogger('pydantic_ai_claude_code.utils').setLevel(logging.INFO)
 ```
 
 This will log:
+
 - Model initialization and configuration
 - CLI command execution and responses
 - Message formatting and conversion
@@ -200,6 +258,7 @@ Or use full model names like `claude-code:claude-sonnet-4-5-20250929`
 Replace your current LLM calls with Claude Code:
 
 **Before:**
+
 ```python
 agent = Agent('openai:gpt-4o')
 # or
@@ -207,6 +266,7 @@ agent = Agent('anthropic:claude-3-5-sonnet-latest')
 ```
 
 **After:**
+
 ```python
 import pydantic_ai_claude_code  # Add this import
 

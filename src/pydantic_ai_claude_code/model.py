@@ -333,10 +333,26 @@ CHOICE: none
         Returns:
             Final assembled prompt string
         """
-        prompt = format_messages_for_claude(
+        prompt, tool_result_files = format_messages_for_claude(
             messages, skip_system_prompt=has_tool_results
         )
         logger.debug("Formatted prompt length: %d chars", len(prompt))
+
+        # Merge tool result files into settings' additional_files
+        if tool_result_files:
+            existing_files = settings.get("additional_files", {})
+            if existing_files:
+                # Merge: tool results take precedence in case of filename conflicts
+                merged_files = {**existing_files, **tool_result_files}
+                settings["additional_files"] = merged_files
+                logger.debug(
+                    "Merged %d tool result files with %d existing additional files",
+                    len(tool_result_files),
+                    len(existing_files)
+                )
+            else:
+                settings["additional_files"] = tool_result_files
+                logger.debug("Added %d tool result files to settings", len(tool_result_files))
 
         # Prepend system instructions
         if system_prompt_parts:
@@ -467,7 +483,17 @@ PREVIOUS ATTEMPT HAD ERRORS:
 
 Please fix the issues above and try again. Follow the directory structure instructions carefully."""
 
-        return f"{instruction}\n\n{format_messages_for_claude(messages, skip_system_prompt=True)}\n\n{retry_instruction}"
+        messages_prompt, tool_result_files = format_messages_for_claude(messages, skip_system_prompt=True)
+
+        # Merge tool result files into arg_settings
+        if tool_result_files:
+            existing_files = arg_settings.get("additional_files", {})
+            if existing_files:
+                arg_settings["additional_files"] = {**existing_files, **tool_result_files}
+            else:
+                arg_settings["additional_files"] = tool_result_files
+
+        return f"{instruction}\n\n{messages_prompt}\n\n{retry_instruction}"
 
     async def _try_collect_arguments(
         self,
@@ -558,7 +584,15 @@ Please fix the issues above and try again. Follow the directory structure instru
 
         # Build initial prompt
         instruction = self._build_argument_collection_instruction(schema, arg_settings)
-        arg_prompt = format_messages_for_claude(messages, skip_system_prompt=True)
+        arg_prompt, tool_result_files = format_messages_for_claude(messages, skip_system_prompt=True)
+
+        # Merge tool result files into arg_settings
+        if tool_result_files:
+            existing_files = arg_settings.get("additional_files", {})
+            if existing_files:
+                arg_settings["additional_files"] = {**existing_files, **tool_result_files}
+            else:
+                arg_settings["additional_files"] = tool_result_files
         arg_prompt = f"{instruction}\n\n{arg_prompt}"
 
         existing_prompt = arg_settings.get("append_system_prompt")

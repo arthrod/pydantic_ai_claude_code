@@ -6,9 +6,11 @@ from unittest import mock
 
 import pytest
 
+from pydantic_ai_claude_code.exceptions import ClaudeOAuthError
 from pydantic_ai_claude_code.types import ClaudeCodeSettings
 from pydantic_ai_claude_code.utils import (
     build_claude_command,
+    detect_oauth_error,
     parse_stream_json_line,
     resolve_claude_cli_path,
 )
@@ -227,3 +229,186 @@ def test_build_claude_command_without_extra_args():
         assert "--model" in cmd
         assert "opus" in cmd
         assert "Follow the instructions in prompt.md" in cmd
+
+
+def test_detect_oauth_error_oauth_token_revoked():
+    """Test detecting OAuth token revoked error."""
+    stdout = '{"type":"result","subtype":"success","is_error":true,"result":"OAuth token revoked · Please run /login"}'
+    stderr = ""
+
+    is_oauth_error, message = detect_oauth_error(stdout, stderr)
+
+    assert is_oauth_error is True
+    assert message == "OAuth token revoked · Please run /login"
+
+
+def test_detect_oauth_error_oauth_token_expired():
+    """Test detecting OAuth token expired error."""
+    stdout = '{"type":"result","is_error":true,"result":"OAuth token expired. Please login again."}'
+    stderr = ""
+
+    is_oauth_error, message = detect_oauth_error(stdout, stderr)
+
+    assert is_oauth_error is True
+    assert message == "OAuth token expired. Please login again."
+
+
+def test_detect_oauth_error_login_required():
+    """Test detecting /login required error."""
+    stdout = '{"type":"result","is_error":true,"result":"Authentication failed. Please run /login"}'
+    stderr = ""
+
+    is_oauth_error, message = detect_oauth_error(stdout, stderr)
+
+    assert is_oauth_error is True
+    assert message == "Authentication failed. Please run /login"
+
+
+def test_detect_oauth_error_no_error():
+    """Test that successful responses are not detected as OAuth errors."""
+    stdout = '{"type":"result","subtype":"success","is_error":false,"result":"Success!"}'
+    stderr = ""
+
+    is_oauth_error, message = detect_oauth_error(stdout, stderr)
+
+    assert is_oauth_error is False
+    assert message is None
+
+
+def test_detect_oauth_error_other_error():
+    """Test that non-OAuth errors are not detected as OAuth errors."""
+    stdout = '{"type":"result","is_error":true,"result":"Some other error occurred"}'
+    stderr = ""
+
+    is_oauth_error, message = detect_oauth_error(stdout, stderr)
+
+    assert is_oauth_error is False
+    assert message is None
+
+
+def test_detect_oauth_error_empty_stdout():
+    """Test handling of empty stdout."""
+    stdout = ""
+    stderr = "Some error"
+
+    is_oauth_error, message = detect_oauth_error(stdout, stderr)
+
+    assert is_oauth_error is False
+    assert message is None
+
+
+def test_detect_oauth_error_invalid_json():
+    """Test handling of invalid JSON in stdout."""
+    stdout = "Not a JSON response"
+    stderr = ""
+
+    is_oauth_error, message = detect_oauth_error(stdout, stderr)
+
+    assert is_oauth_error is False
+    assert message is None
+
+
+def test_detect_oauth_error_multiline_output():
+    """Test handling of multiline stdout (only first line parsed as JSON)."""
+    stdout = (
+        '{"type":"result","is_error":true,"result":"OAuth token revoked · Please run /login"}\n'
+        "Additional output line 1\n"
+        "Additional output line 2"
+    )
+    stderr = ""
+
+    is_oauth_error, message = detect_oauth_error(stdout, stderr)
+
+    assert is_oauth_error is True
+    assert message == "OAuth token revoked · Please run /login"
+
+
+def test_detect_oauth_error_error_field():
+    """Test detecting OAuth error in the 'error' field instead of 'result'."""
+    stdout = '{"type":"result","is_error":true,"error":"OAuth token authentication failed. Please run /login"}'
+    stderr = ""
+
+    is_oauth_error, message = detect_oauth_error(stdout, stderr)
+
+    assert is_oauth_error is True
+    assert message == "OAuth token authentication failed. Please run /login"
+
+
+def test_oauth_error_exception_attributes():
+    """Test ClaudeOAuthError exception attributes."""
+    error = ClaudeOAuthError(
+        "OAuth token revoked · Please run /login",
+        reauth_instruction="Please run /login"
+    )
+
+    assert str(error) == "OAuth token revoked · Please run /login"
+    assert error.reauth_instruction == "Please run /login"
+
+
+def test_oauth_error_exception_default_instruction():
+    """Test ClaudeOAuthError with default reauth instruction."""
+    error = ClaudeOAuthError("OAuth token expired")
+
+    assert str(error) == "OAuth token expired"
+    assert error.reauth_instruction == "Please run /login"
+
+
+def test_oauth_error_inherits_from_runtime_error():
+    """Test that ClaudeOAuthError inherits from RuntimeError."""
+    error = ClaudeOAuthError("OAuth error")
+
+    assert isinstance(error, RuntimeError)
+    assert isinstance(error, ClaudeOAuthError)
+
+
+def test_detect_oauth_error_takes_priority_over_rate_limit_pattern():
+    """Test that OAuth error is detected even if rate limit pattern is present.
+
+    This validates the fix for the false positive issue: if both OAuth error
+    and rate limit text are present, we should detect OAuth (more specific)
+    rather than treating it as a rate limit (less specific regex).
+    """
+    # Response contains both OAuth error AND rate limit text
+    stdout = (
+        '{"type":"result","is_error":true,"result":"OAuth token revoked · Please run /login. '
+        'Note: Your usage limit reached and resets 3PM tomorrow."}'
+    )
+    stderr = ""
+
+    # Should detect as OAuth error (more specific)
+    is_oauth_error, oauth_message = detect_oauth_error(stdout, stderr)
+    assert is_oauth_error is True
+    assert oauth_message is not None
+    assert "OAuth token revoked" in oauth_message
+
+    # Rate limit detection should also find the pattern
+    from pydantic_ai_claude_code.utils import detect_rate_limit
+    is_rate_limited, reset_time = detect_rate_limit(stdout)
+    assert is_rate_limited is True
+
+    # But in the actual error handling flow, OAuth should be checked FIRST
+    # and raise immediately, preventing the rate limit wait
+
+
+def test_detect_oauth_error_vs_rate_limit_priority():
+    """Test scenarios to verify OAuth vs rate limit detection priority."""
+
+    # Scenario 1: Only OAuth error
+    stdout_oauth_only = '{"type":"result","is_error":true,"result":"OAuth token expired. Please run /login"}'
+    is_oauth, _ = detect_oauth_error(stdout_oauth_only, "")
+    assert is_oauth is True
+
+    # Scenario 2: Only rate limit
+    stdout_rate_limit_only = '{"type":"result","is_error":true,"result":"5-hour limit reached ∙ resets 3PM"}'
+    is_oauth, _ = detect_oauth_error(stdout_rate_limit_only, "")
+    assert is_oauth is False  # Should NOT be detected as OAuth
+
+    # Scenario 3: Both patterns present (edge case)
+    stdout_both = (
+        '{"type":"result","is_error":true,"result":'
+        '"OAuth token revoked. Your 5-hour limit reached and resets 11PM. Please run /login"}'
+    )
+    is_oauth, msg = detect_oauth_error(stdout_both, "")
+    assert is_oauth is True  # OAuth should be detected
+    assert msg is not None
+    assert "/login" in msg  # Message should contain OAuth instruction

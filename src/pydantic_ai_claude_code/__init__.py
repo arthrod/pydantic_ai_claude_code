@@ -24,6 +24,21 @@ Example:
     print(result.data)
     ```
 
+Error Handling:
+    For long-running processes (>7 hours), handle OAuth token expiration:
+    ```python
+    from pydantic_ai import Agent
+    from pydantic_ai_claude_code import ClaudeOAuthError
+
+    agent = Agent('claude-code:sonnet')
+
+    try:
+        result = agent.run_sync("Long running task")
+    except ClaudeOAuthError as e:
+        print(f"Auth expired: {e.reauth_instruction}")
+        # User runs /login, then retry
+    ```
+
 Logging:
     To enable debug logging in your application:
     ```python
@@ -34,6 +49,7 @@ Logging:
 
 import logging
 
+from .exceptions import ClaudeOAuthError
 from .model import ClaudeCodeModel
 from .provider import ClaudeCodeProvider
 from .registration import register_claude_code_model
@@ -60,4 +76,5 @@ __all__ = [
     "ClaudeCodeModel",
     "ClaudeCodeProvider",
     "ClaudeCodeSettings",
+    "ClaudeOAuthError",
 ]

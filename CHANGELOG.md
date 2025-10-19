@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **OAuth error handling**: New `ClaudeOAuthError` exception for graceful handling of OAuth token expiration in long-running sessions
+  - Specific exception type (inherits from `RuntimeError`) allows targeted error handling
+  - Includes `reauth_instruction` attribute with user-facing guidance (default: "Please run /login")
+  - Automatically raised when Claude CLI reports OAuth token expired/revoked errors
+  - Enables retry logic for batch processing jobs that exceed ~7 hour token lifetime
+  - Exported in package `__all__` for easy import: `from pydantic_ai_claude_code import ClaudeOAuthError`
+  - Fully documented in README.md with simple and batch processing examples
+
+- **Tool results as file attachments**: Tool execution results now written to temporary files instead of embedded in prompts
+  - Uses same mechanism as `additional_files` feature for consistency
+  - Tool results written to `tool_result_{counter}_{tool_name}.txt` temp files
+  - Prevents prompt bloat with large tool outputs
+  - Files automatically merged into `additional_files` settings dict
+  - Prompt includes reference: "Additional Information: The results from the {tool_name} tool are available in the file {filename}"
+
+### Changed
+- **Error detection priority system**: Implemented priority-based error handling to prevent false positives
+  - Priority 1: OAuth errors (most specific - JSON parsing + keyword matching)
+  - Priority 2: Rate limit errors (regex pattern matching)
+  - Priority 3: Infrastructure failures (timeout, process errors)
+  - Priority 4: Generic errors
+  - Prevents multi-hour waits when OAuth has actually expired but rate limit pattern matches error message
+
+- **Message formatting refactoring**: Reduced complexity in `messages.py` through helper function extraction
+  - `format_messages_for_claude()` signature changed to return `tuple[str, dict[str, Path]]`
+  - Extracted `_create_tool_result_file()` for temp file creation
+  - Extracted `_process_request_parts()` for ModelRequest processing
+  - Extracted `_process_response_parts()` for ModelResponse processing
+  - Extracted `_count_request_parts()` and `_count_response_parts()` for conversation context
+  - All functions now meet complexity thresholds (≤10 cyclomatic complexity)
+
+### Fixed
+- **Rate limit false positives**: OAuth errors now detected before rate limit pattern matching
+  - Previously, error messages containing both OAuth keywords and rate limit text would trigger rate limit retry
+  - Now correctly raises `ClaudeOAuthError` immediately for faster failure and clearer error messages
+
 ## [0.5.14] - 2025-10-18
 
 ### Fixed

@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+from .exceptions import ClaudeOAuthError
 from .types import ClaudeCodeSettings, ClaudeJSONResponse, ClaudeStreamEvent
 
 logger = logging.getLogger(__name__)
@@ -156,6 +157,75 @@ def detect_cli_infrastructure_failure(stderr: str) -> bool:
 
     # Other transient errors
     return bool("ENOENT" in stderr or "EACCES" in stderr)
+
+
+def detect_oauth_error(stdout: str, stderr: str) -> tuple[bool, str | None]:
+    """Detect OAuth authentication errors from Claude CLI output.
+
+    The CLI returns OAuth errors in the JSON response (stdout), not stderr.
+    Example response:
+    {
+        "type": "result",
+        "subtype": "success",
+        "is_error": true,
+        "result": "OAuth token revoked · Please run /login"
+    }
+
+    Args:
+        stdout: Standard output from Claude CLI (may contain JSON response)
+        stderr: Standard error output (typically empty for OAuth errors)
+
+    Returns:
+        Tuple of (is_oauth_error, error_message)
+        - is_oauth_error: True if this is an OAuth/authentication error
+        - error_message: The error message from the CLI, or None if not an OAuth error
+    """
+    if not stdout:
+        return False, None
+
+    try:
+        # Try to parse JSON from first line of stdout
+        first_line = stdout.strip().split("\n")[0]
+        response = json.loads(first_line)
+
+        # Check if this is an error response
+        if not isinstance(response, dict):
+            return False, None
+
+        if not response.get("is_error"):
+            return False, None
+
+        # Check the error message for OAuth/authentication indicators
+        result_msg = response.get("result", "")
+        error_msg = response.get("error", "")
+        combined_msg = f"{result_msg} {error_msg}".lower()
+
+        # OAuth token errors
+        oauth_indicators = [
+            "oauth token",
+            "oauth_token",
+            "/login",
+            "authentication",
+            "auth expired",
+            "auth failed",
+            "token expired",
+            "token revoked",
+            "please login",
+            "please log in",
+        ]
+
+        for indicator in oauth_indicators:
+            if indicator in combined_msg:
+                # Return the actual error message from the result field
+                actual_message = result_msg or error_msg or "Authentication error"
+                logger.info("Detected OAuth error: %s", actual_message)
+                return True, actual_message
+
+    except (json.JSONDecodeError, KeyError, IndexError):
+        # Not a valid JSON response, continue to check stderr
+        pass
+
+    return False, None
 
 
 def _add_tool_permission_flags(cmd: list[str], settings: ClaudeCodeSettings) -> None:
@@ -435,7 +505,10 @@ def _check_rate_limit_and_retry(
 def _handle_sync_command_failure(
     result: subprocess.CompletedProcess[str], elapsed: float, prompt_len: int, cwd: str
 ) -> None:
-    """Handle failed command execution.
+    """Handle failed command execution with generic error.
+
+    Note: Specific errors (OAuth, rate limit, infrastructure) should be checked
+    before calling this function. This handles remaining generic errors.
 
     Args:
         result: Failed subprocess result
@@ -447,7 +520,7 @@ def _handle_sync_command_failure(
         RuntimeError: Always raises with appropriate error message
     """
     stderr_text = result.stderr if result.stderr else "(no error output)"
-    stdout_text = result.stdout[:500] if result.stdout else "(no stdout)"
+    stdout_text = result.stdout if result.stdout else ""
 
     logger.error(
         "Claude CLI failed after %.1fs with return code %d\n"
@@ -460,9 +533,10 @@ def _handle_sync_command_failure(
         prompt_len,
         cwd,
         stderr_text,
-        stdout_text,
+        stdout_text[:500],
     )
 
+    # Generic error handling
     if elapsed > LONG_RUNTIME_THRESHOLD_SECONDS:
         raise RuntimeError(
             f"Claude CLI failed after {elapsed:.1f}s with return code {result.returncode}: {stderr_text}\n"
@@ -529,6 +603,12 @@ def _try_sync_execution_with_rate_limit_retry(
 ) -> tuple[ClaudeJSONResponse | None, bool]:
     """Try command execution with rate limit retry.
 
+    Error detection priority (most specific to least specific):
+    1. OAuth errors (requires JSON + specific keywords) - raise immediately
+    2. Rate limit errors (regex pattern) - wait and retry
+    3. Infrastructure failures (stderr patterns) - signal retry
+    4. Generic errors - raise
+
     Returns:
         Tuple of (response if successful or None, should_retry_infra)
     """
@@ -537,21 +617,32 @@ def _try_sync_execution_with_rate_limit_retry(
         result = _execute_sync_command(cmd, cwd, timeout_seconds)
         elapsed = time.time() - start_time
 
-        # Check rate limit first
-        should_retry, wait_seconds = _check_rate_limit_and_retry(result, retry_enabled)
-        if should_retry:
-            time.sleep(wait_seconds)
-            logger.info("Wait complete, retrying...")
-            continue
-
-        # Check for infrastructure failures
+        # Check for errors if command failed
         if result.returncode != 0:
+            stdout_text = result.stdout if result.stdout else ""
             stderr_text = result.stderr if result.stderr else ""
+
+            # Priority 1: Check OAuth errors first (most specific)
+            is_oauth_error, oauth_message = detect_oauth_error(stdout_text, stderr_text)
+            if is_oauth_error and oauth_message:
+                raise ClaudeOAuthError(
+                    f"Claude CLI authentication expired after {elapsed:.1f}s: {oauth_message}",
+                    reauth_instruction=oauth_message if "/login" in oauth_message else "Please run /login"
+                )
+
+            # Priority 2: Check rate limit (less specific, could have false positives)
+            should_retry, wait_seconds = _check_rate_limit_and_retry(result, retry_enabled)
+            if should_retry:
+                time.sleep(wait_seconds)
+                logger.info("Wait complete, retrying...")
+                continue
+
+            # Priority 3: Check for infrastructure failures
             if detect_cli_infrastructure_failure(stderr_text):
                 # Signal to retry in outer loop
                 return None, True
 
-            # Not an infrastructure failure - handle as usual
+            # Priority 4: Generic error handling
             _handle_sync_command_failure(result, elapsed, 0, cwd)
 
         # Success - parse and return
@@ -728,7 +819,10 @@ async def _check_rate_limit_and_retry_async(
 def _handle_async_command_failure(
     process_output: tuple[bytes, bytes, int], elapsed: float, prompt_len: int, cwd: str
 ) -> None:
-    """Handle failed async command execution.
+    """Handle failed async command execution with generic error.
+
+    Note: Specific errors (OAuth, rate limit, infrastructure) should be checked
+    before calling this function. This handles remaining generic errors.
 
     Args:
         process_output: Tuple of (stdout, stderr, returncode) from process
@@ -741,7 +835,7 @@ def _handle_async_command_failure(
     """
     stdout, stderr, returncode = process_output
     stderr_text = stderr.decode() if stderr else "(no error output)"
-    stdout_text = stdout.decode()[:500] if stdout else "(no stdout)"
+    stdout_text = stdout.decode() if stdout else ""
 
     logger.error(
         "Claude CLI failed after %.1fs with return code %d\n"
@@ -754,9 +848,10 @@ def _handle_async_command_failure(
         prompt_len,
         cwd,
         stderr_text,
-        stdout_text,
+        stdout_text[:500],
     )
 
+    # Generic error handling
     if elapsed > LONG_RUNTIME_THRESHOLD_SECONDS:
         raise RuntimeError(
             f"Claude CLI failed after {elapsed:.1f}s with return code {returncode}: {stderr_text}\n"
@@ -775,6 +870,12 @@ async def _try_async_execution_with_rate_limit_retry(
 ) -> tuple[ClaudeJSONResponse | None, bool]:
     """Try async command execution with rate limit retry.
 
+    Error detection priority (most specific to least specific):
+    1. OAuth errors (requires JSON + specific keywords) - raise immediately
+    2. Rate limit errors (regex pattern) - wait and retry
+    3. Infrastructure failures (stderr patterns) - signal retry
+    4. Generic errors - raise
+
     Returns:
         Tuple of (response if successful or None, should_retry_infra)
     """
@@ -786,23 +887,34 @@ async def _try_async_execution_with_rate_limit_retry(
         elapsed = time.time() - start_time
         stdout, stderr, returncode = process_output
 
-        # Check rate limit first
-        should_retry, wait_seconds = await _check_rate_limit_and_retry_async(
-            stdout, stderr, returncode, retry_enabled
-        )
-        if should_retry:
-            await asyncio.sleep(wait_seconds)
-            logger.info("Wait complete, retrying...")
-            continue
-
-        # Check for infrastructure failures
+        # Check for errors if command failed
         if returncode != 0:
+            stdout_text = stdout.decode() if stdout else ""
             stderr_text = stderr.decode() if stderr else ""
+
+            # Priority 1: Check OAuth errors first (most specific)
+            is_oauth_error, oauth_message = detect_oauth_error(stdout_text, stderr_text)
+            if is_oauth_error and oauth_message:
+                raise ClaudeOAuthError(
+                    f"Claude CLI authentication expired after {elapsed:.1f}s: {oauth_message}",
+                    reauth_instruction=oauth_message if "/login" in oauth_message else "Please run /login"
+                )
+
+            # Priority 2: Check rate limit (less specific, could have false positives)
+            should_retry, wait_seconds = await _check_rate_limit_and_retry_async(
+                stdout, stderr, returncode, retry_enabled
+            )
+            if should_retry:
+                await asyncio.sleep(wait_seconds)
+                logger.info("Wait complete, retrying...")
+                continue
+
+            # Priority 3: Check for infrastructure failures
             if detect_cli_infrastructure_failure(stderr_text):
                 # Signal to retry in outer loop
                 return None, True
 
-            # Not an infrastructure failure - handle as usual
+            # Priority 4: Generic error handling
             _handle_async_command_failure(process_output, elapsed, 0, cwd)
 
         # Success - parse and return
