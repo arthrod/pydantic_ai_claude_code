@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Structured output with tools**: Fixed bug where agents with both `output_type` and `tools` would fail when the model chose not to call any tool (function selection = "none")
+  - Previously made unstructured follow-up request, ignoring `output_type` setting
+  - Now correctly makes structured follow-up request to get the typed output
+  - Added new `_handle_structured_follow_up()` method to handle this case
+  - Fixed `_build_system_prompt_parts()` to add output instructions after tool results
+
+- **Control flow reliability**: Replaced fragile string-based control flow with settings-based approach
+  - Eliminated `if "[Function selection: none" in content:` pattern
+  - Now uses `__function_selection_result__` setting key ("none" or "selected")
+  - More reliable and maintainable state management
+
+### Changed
+- **Code quality improvements**: Refactored code to meet linting standards
+  - Extracted helper methods to reduce function complexity (PLR0915, PLR0912)
+  - `_build_function_tools_prompt()`: Extracted `_xml_to_markdown()` and `_build_function_option_descriptions()`
+  - `model.py request()`: Extracted `_handle_function_selection_followup()`
+  - `messages.py`: Extracted `_process_user_prompt_part()` and `_process_tool_return_part()`
+  - All functions now under 30 statements and 12 branches
+
+- **Test improvements**: Made streaming behavior test more robust
+  - Changed prompt from "Count from 1 to 5" to generating paragraphs about renewable energy
+  - Removed fragile "read" keyword assertion that was testing Claude's wording style
+  - Focused on core requirement: internal file references like "prompt.md" shouldn't leak
+
+- **Binary content test updates**: Updated test assertions to match current @ syntax implementation
+  - Changed from `[Image: filename]` format to `@filename` format
+  - Aligns with commit 996ca2c implementation
+
 ## [0.7.0] - 2025-10-19
 
 ### Changed
