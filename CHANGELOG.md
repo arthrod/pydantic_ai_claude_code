@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2025-10-19
+
 ### Fixed
 - **Structured output with tools**: Fixed bug where agents with both `output_type` and `tools` would fail when the model chose not to call any tool (function selection = "none")
   - Previously made unstructured follow-up request, ignoring `output_type` setting
