@@ -1,9 +1,10 @@
 """Tests for tool calling functionality."""
 
+from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent, BinaryContent, RunContext
 from pydantic_ai.messages import ToolCallPart
 
 from pydantic_ai_claude_code.tools import (
@@ -519,3 +520,71 @@ def test_agent_multiple_tools_selective_calling():
 
     # Should call the time tool, not weather or news
     assert "12:00" in result.output or "time" in result.output.lower()
+
+
+def test_agent_tool_returns_binary_content():
+    """Test agent with a tool that returns BinaryContent (e.g., generated image)."""
+    import tempfile
+
+    # Get the fixtures directory
+    fixtures_dir = Path(__file__).parent / "fixtures"
+    test_image = fixtures_dir / "Bert-WhiteBorder.png"
+
+    # Skip if fixture not available
+    if not test_image.exists():
+        pytest.skip("Test fixture not available")
+
+    def generate_image(image_type: str) -> BinaryContent:
+        """Generate an image based on the requested type.
+
+        Args:
+            image_type: Type of image to generate
+
+        Returns:
+            Binary image data
+        """
+        # For testing, return a real PNG file
+        image_data = test_image.read_bytes()
+        return BinaryContent(data=image_data, media_type='image/png')
+
+    # Use context manager but manually clean up to allow inspection on failure
+    tmpdir = tempfile.mkdtemp(prefix="test_binary_tool_")
+
+    try:
+        agent = Agent("claude-code:sonnet", tools=[generate_image])
+
+        result = agent.run_sync(
+            "Generate a test image and tell me what you see in it.",
+            model_settings={"working_directory": tmpdir}
+        )
+
+        # Verify we got a response
+        assert result.output is not None
+        assert isinstance(result.output, str)
+
+        # Verify Claude actually saw and described the image (Bert from Sesame Street)
+        assert "bert" in result.output.lower(), f"Claude should have identified Bert in the image. Response: {result.output}"
+
+        # Verify the tool was called (check message history)
+        tool_called = any(
+            'generate_image' in str(msg)
+            for msg in result.all_messages()
+        )
+        assert tool_called, "Tool should have been called"
+
+        # Find PNG files in working directory (should be in subdirectory 2/)
+        all_png_files = list(Path(tmpdir).rglob('*.png'))
+        assert len(all_png_files) >= 1, f"PNG file should exist in {tmpdir}"
+
+        # Verify the binary data was preserved
+        written_data = all_png_files[0].read_bytes()
+        original_data = test_image.read_bytes()
+        assert written_data == original_data, "Binary data should be preserved"
+
+        print(f"\nPNG file created: {all_png_files[0].relative_to(tmpdir)}")
+        print(f"Claude's response: {result.output[:200]}...")
+        print(f"Temp directory preserved: {tmpdir}")
+
+    except Exception as e:
+        print(f"\nTest failed! Temp directory preserved for inspection: {tmpdir}")
+        raise

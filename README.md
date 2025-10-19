@@ -164,6 +164,63 @@ Files are copied into the working directory before execution, and Claude can ref
 
 Each execution gets its own numbered subdirectory with isolated file copies.
 
+### Binary Content (Standard Interface)
+
+Use Pydantic AI's standard `BinaryContent` interface to attach images, PDFs, and other binary files. This works identically across all model providers:
+
+```python
+from pathlib import Path
+from pydantic_ai import Agent, BinaryContent
+
+agent = Agent('claude-code:sonnet')
+
+# Send an image from file
+image_data = Path('photo.jpg').read_bytes()
+result = agent.run_sync(
+    [
+        'What is in this image?',
+        BinaryContent(data=image_data, media_type='image/jpeg'),
+    ]
+)
+
+# Send a PDF document
+pdf_data = Path('document.pdf').read_bytes()
+result = agent.run_sync(
+    [
+        'Summarize this document:',
+        BinaryContent(data=pdf_data, media_type='application/pdf'),
+    ]
+)
+
+# Compare multiple images
+result = agent.run_sync(
+    [
+        'Compare these images:',
+        BinaryContent(data=image1_data, media_type='image/png'),
+        'and',
+        BinaryContent(data=image2_data, media_type='image/jpeg'),
+    ]
+)
+```
+
+**How it works:**
+
+- Binary content is automatically written to files in the working directory
+- Files are referenced in the prompt (e.g., `[Image: filename.png]`)
+- Claude Code CLI can then read the files directly
+- No Claude Code-specific code needed - this is standard Pydantic AI!
+
+**Supported formats:**
+- Images: PNG, JPEG, GIF, WebP, etc.
+- Documents: PDF, TXT, JSON, etc.
+- Audio: MP3, WAV, etc.
+- Video: MP4, WebM, etc.
+
+**Benefits:**
+- **Portable code** - works with OpenAI, Anthropic, Google, and Claude Code
+- **Standard interface** - same `BinaryContent` class for all providers
+- **No provider lock-in** - switch between cloud and local with one line change
+
 ### Error Handling
 
 #### OAuth Token Expiration
@@ -294,7 +351,8 @@ See the `examples/` directory for more demonstrations:
 - `async_example.py` - Async/await usage patterns
 - `advanced_example.py` - Custom provider configurations
 - `tools_and_streaming.py` - Custom tools and streaming responses
-- `additional_files_example.py` - Providing local files for analysis
+- `binary_content_example.py` - Standard interface for images, PDFs, and binary files
+- `additional_files_example.py` - Providing local files for analysis (Claude Code-specific)
 
 ## License
 

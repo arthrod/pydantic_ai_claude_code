@@ -86,12 +86,9 @@ class ClaudeCodeProvider:
         exc_val: BaseException | None,
         exc_tb: Any,
     ) -> None:
-        """Context manager exit - cleans up temp directory if created."""
-        if self._temp_dir and self._temp_dir.exists():
-            import shutil
-
-            logger.debug("Cleaning up temporary workspace: %s", self._temp_dir)
-            shutil.rmtree(self._temp_dir, ignore_errors=True)
+        """Context manager exit - temp directories are NOT cleaned up for debugging."""
+        if self._temp_dir:
+            logger.debug("Temp workspace preserved for inspection: %s", self._temp_dir)
             self._temp_dir = None
 
     async def __aenter__(self) -> Self:

@@ -182,6 +182,73 @@ class ClaudeCodeModel(Model):
             for part in msg.parts
         )
 
+    @staticmethod
+    def _xml_to_markdown(xml_text: str) -> str:
+        """Convert XML-tagged description to markdown format.
+
+        Args:
+            xml_text: Text with XML tags like <summary>, <returns>, <description>
+
+        Returns:
+            Markdown-formatted text
+        """
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(xml_text, 'html.parser')
+
+        summary = soup.find('summary')
+        returns = soup.find('returns')
+
+        parts = []
+        if summary:
+            summary_text = summary.get_text(strip=True)
+            # Ensure summary ends with period
+            if summary_text and not summary_text.endswith('.'):
+                summary_text += '.'
+            parts.append(summary_text)
+        if returns:
+            desc = returns.find('description')
+            if desc:
+                parts.append(f"Returns: {desc.get_text(strip=True)}")
+
+        return " ".join(parts) if parts else xml_text
+
+    def _build_function_option_descriptions(
+        self, function_tools: list[Any]
+    ) -> list[str]:
+        """Build option descriptions for function selection prompt.
+
+        Args:
+            function_tools: List of function tool definitions
+
+        Returns:
+            List of formatted option descriptions
+        """
+        option_descriptions = []
+        for i, tool in enumerate(function_tools, 1):
+            desc = tool.description or "No description"
+            desc_clean = self._xml_to_markdown(desc)
+
+            schema = tool.parameters_json_schema
+            logger.info("Tool %d: %s", i, tool.name)
+            logger.info("  Description: %s", desc_clean)
+            logger.info("  Schema: %s", json.dumps(schema, indent=2))
+
+            params = schema.get("properties", {})
+            param_hints = [
+                f"{param_name}: {param_schema.get('type', 'unknown')}"
+                for param_name, param_schema in params.items()
+            ]
+            params_str = (
+                f" (parameters: {', '.join(param_hints)})" if param_hints else ""
+            )
+            option_descriptions.append(f"{i}. {tool.name}{params_str} - {desc_clean}")
+
+        option_descriptions.append(
+            f"{len(function_tools) + 1}. none - Answer directly without calling any function"
+        )
+        return option_descriptions
+
     def _build_function_tools_prompt(
         self, function_tools: list[Any]
     ) -> tuple[str, dict[str, Any]]:
@@ -197,26 +264,7 @@ class ClaudeCodeModel(Model):
         logger.info("BUILDING FUNCTION TOOLS PROMPT - Total tools: %d", len(function_tools))
         logger.info("=" * 80)
 
-        option_descriptions = []
-        for i, tool in enumerate(function_tools, 1):
-            desc = tool.description or "No description"
-            schema = tool.parameters_json_schema
-            logger.info("Tool %d: %s", i, tool.name)
-            logger.info("  Description: %s", desc)
-            logger.info("  Schema: %s", json.dumps(schema, indent=2))
-
-            params = schema.get("properties", {})
-            param_hints = []
-            for param_name, param_schema in params.items():
-                param_type = param_schema.get("type", "unknown")
-                param_hints.append(f"{param_name}: {param_type}")
-            params_str = (
-                f" (parameters: {', '.join(param_hints)})" if param_hints else ""
-            )
-            option_descriptions.append(f"{i}. {tool.name}{params_str} - {desc}")
-        option_descriptions.append(
-            f"{len(function_tools) + 1}. none - Answer directly without calling any function"
-        )
+        option_descriptions = self._build_function_option_descriptions(function_tools)
 
         prompt = f"""# Function Selection Task
 
@@ -315,19 +363,31 @@ CHOICE: none
             settings["__available_functions__"] = available_functions
             system_prompt_parts.append(function_selection_prompt)
 
-        # Add output instructions (only if not in function call mode)
+        # Add output instructions
         # Skip file writing instructions for streaming - we need direct text output
         if not is_streaming:
-            if output_tools and not function_tools:
-                json_instruction = self._build_structured_output_instruction(
-                    output_tools[0], settings
-                )
-                system_prompt_parts.append(json_instruction)
+            # Determine if we should add output instructions
+            should_add_output_instructions = False
+
+            if has_tool_results:
+                # After tool execution, always add output instructions
+                should_add_output_instructions = True
             elif not function_tools:
-                unstructured_instruction = self._build_unstructured_output_instruction(
-                    settings
-                )
-                system_prompt_parts.append(unstructured_instruction)
+                # No function tools - add output instructions
+                should_add_output_instructions = True
+
+            # Add appropriate output instruction (structured or unstructured)
+            if should_add_output_instructions:
+                if output_tools:
+                    json_instruction = self._build_structured_output_instruction(
+                        output_tools[0], settings
+                    )
+                    system_prompt_parts.append(json_instruction)
+                else:
+                    unstructured_instruction = self._build_unstructured_output_instruction(
+                        settings
+                    )
+                    system_prompt_parts.append(unstructured_instruction)
 
         return system_prompt_parts
 
@@ -401,6 +461,70 @@ CHOICE: none
             usage=usage,
         )
 
+    async def _handle_structured_follow_up(
+        self,
+        messages: list[ModelMessage],
+        model_request_parameters: ModelRequestParameters,
+    ) -> ModelResponse:
+        """Handle structured follow-up request when function selection is 'none' but output_type is set.
+
+        Args:
+            messages: Original message list
+            model_request_parameters: Request parameters with output_tools
+
+        Returns:
+            Model response with structured output
+        """
+        logger.info(
+            "Function selection was 'none', making follow-up structured request"
+        )
+
+        structured_settings = self.provider.get_settings(model=self._model_name)
+        # Disable function selection mode for follow-up
+        structured_settings["__function_selection_mode__"] = False
+
+        output_tools = (
+            model_request_parameters.output_tools if model_request_parameters else []
+        )
+
+        # Build structured output instruction
+        system_prompt_parts = []
+
+        if model_request_parameters and hasattr(
+            model_request_parameters, "system_prompt"
+        ):
+            sp = getattr(model_request_parameters, "system_prompt", None)
+            if sp:
+                system_prompt_parts.append(sp)
+
+        if output_tools:
+            structured_instruction = self._build_structured_output_instruction(
+                output_tools[0], structured_settings
+            )
+            system_prompt_parts.append(structured_instruction)
+
+        structured_prompt = self._assemble_final_prompt(
+            messages,
+            system_prompt_parts,
+            structured_settings,
+            has_tool_results=False,
+        )
+
+        logger.debug(
+            "Making structured request with prompt length: %d",
+            len(structured_prompt),
+        )
+        structured_response = await run_claude_async(
+            structured_prompt, settings=structured_settings
+        )
+
+        return self._convert_response(
+            structured_response,
+            output_tools=output_tools,
+            function_tools=[],
+            settings=structured_settings,
+        )
+
     async def _handle_unstructured_follow_up(
         self,
         messages: list[ModelMessage],
@@ -420,6 +544,9 @@ CHOICE: none
         )
 
         unstructured_settings = self.provider.get_settings(model=self._model_name)
+        # Disable function selection mode for follow-up
+        unstructured_settings["__function_selection_mode__"] = False
+
         system_prompt_parts = []
 
         if model_request_parameters and hasattr(
@@ -787,6 +914,89 @@ Please fix the issues above and try again. Follow the directory structure instru
             schema, temp_data_dir, tool_name, tool_description
         )
 
+    async def _handle_function_selection_followup(
+        self,
+        messages: list[ModelMessage],
+        model_request_parameters: ModelRequestParameters,
+        settings: ClaudeCodeSettings,
+        response: ClaudeJSONResponse,
+        result: ModelResponse,
+    ) -> ModelResponse:
+        """Handle function selection follow-up routing.
+
+        Args:
+            messages: Original message list
+            model_request_parameters: Request parameters (contains output_tools and function_tools)
+            settings: Settings dict with function selection state
+            response: Raw CLI response
+            result: Converted model response
+
+        Returns:
+            Final model response (may be from follow-up request)
+        """
+        function_tools = (
+            model_request_parameters.function_tools if model_request_parameters else []
+        )
+        output_tools = (
+            model_request_parameters.output_tools if model_request_parameters else []
+        )
+
+        logger.debug(
+            "After _convert_response: function_tools=%s, __function_selection_mode__=%s, result.parts=%s",
+            bool(function_tools),
+            settings.get("__function_selection_mode__"),
+            [type(p).__name__ for p in result.parts],
+        )
+
+        # Handle function selection results using settings-based control flow
+        # (more reliable than string matching in response text)
+        if not (function_tools and settings.get("__function_selection_mode__")):
+            return result
+
+        selection_result = settings.get("__function_selection_result__")
+
+        if selection_result == "none":
+            # Model chose not to call any function - make follow-up request
+            # with appropriate output format (structured or unstructured)
+            if output_tools:
+                logger.info(
+                    "Function selection 'none' with structured output - "
+                    "making structured follow-up request"
+                )
+                return await self._handle_structured_follow_up(
+                    messages, model_request_parameters
+                )
+            else:
+                logger.info(
+                    "Function selection 'none' with unstructured output - "
+                    "making unstructured follow-up request"
+                )
+                return await self._handle_unstructured_follow_up(
+                    messages, model_request_parameters
+                )
+
+        elif selection_result == "selected":
+            # Model selected a function - collect arguments
+            selected_function = settings.get("__selected_function__")
+            if selected_function:
+                available_functions = settings.get("__available_functions__", {})
+                if isinstance(available_functions, dict):
+                    logger.info(
+                        "Function selected: %s - collecting arguments",
+                        selected_function,
+                    )
+                    return await self._handle_argument_collection(
+                        messages, selected_function, available_functions, response
+                    )
+        # Unexpected or missing selection result
+        elif selection_result is not None:
+            logger.warning(
+                "Unexpected function selection result: %s (expected 'none' or 'selected')",
+                selection_result,
+            )
+
+        return result
+
     async def request(
         self,
         messages: list[ModelMessage],
@@ -857,36 +1067,13 @@ Please fix the issues above and try again. Follow the directory structure instru
         )
 
         # Handle function selection follow-ups if needed
-        logger.debug(
-            "After _convert_response: function_tools=%s, __function_selection_mode__=%s, result.parts=%s",
-            bool(function_tools),
-            settings.get("__function_selection_mode__"),
-            [type(p).__name__ for p in result.parts],
+        return await self._handle_function_selection_followup(
+            messages,
+            model_request_parameters,
+            settings,
+            response,
+            result,
         )
-
-        if (
-            function_tools
-            and settings.get("__function_selection_mode__")
-            and len(result.parts) == 1
-            and isinstance(result.parts[0], TextPart)
-        ):
-            content = result.parts[0].content
-
-            if "[Function selection: none" in content:
-                return await self._handle_unstructured_follow_up(
-                    messages, model_request_parameters
-                )
-
-            if "[Function selected:" in content:
-                selected_function = settings.get("__selected_function__")
-                if selected_function:
-                    available_functions = settings.get("__available_functions__", {})
-                    if isinstance(available_functions, dict):
-                        return await self._handle_argument_collection(
-                            messages, selected_function, available_functions, response
-                        )
-
-        return result
 
     @asynccontextmanager
     async def request_stream(
@@ -1056,10 +1243,12 @@ Then provide your complete response after the marker.
 
             parts: list[TextPart | ToolCallPart] = []
             if matched_option == "none":
-                # Claude chose to answer directly - signal needs unstructured response
+                # Claude chose to answer directly
                 logger.info(
-                    "Function selection returned 'none' - will trigger unstructured response"
+                    "Function selection returned 'none' - will proceed to final response"
                 )
+                # Store the selection in settings for reliable control flow
+                settings["__function_selection_result__"] = "none"
                 parts.append(
                     TextPart(content="[Function selection: none - answering directly]")
                 )
@@ -1069,13 +1258,14 @@ Then provide your complete response after the marker.
                     "Function selected: %s - will trigger argument collection",
                     matched_option,
                 )
+                # Store selected function for next request
+                settings["__selected_function__"] = matched_option
+                settings["__function_selection_result__"] = "selected"
                 parts.append(
                     TextPart(
                         content=f"[Function selected: {matched_option} - collecting arguments]"
                     )
                 )
-                # Store selected function for next request
-                settings["__selected_function__"] = matched_option
 
             return self._create_model_response_with_usage(response, parts)
 

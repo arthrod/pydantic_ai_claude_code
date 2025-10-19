@@ -160,6 +160,7 @@ class ClaudeCodeSettings(TypedDict, total=False):
     __function_selection_mode__: bool  # Internal: whether function selection is active
     __available_functions__: dict[str, Any]  # Internal: available function definitions
     __selected_function__: str  # Internal: name of selected function
+    __function_selection_result__: str  # Internal: result of function selection ("none" or "selected")
     __response_file_path: str  # Internal: path to save raw response JSON
     __working_directory: str  # Internal: determined working directory path
     __tool_name: str  # Internal: name of tool for argument collection
