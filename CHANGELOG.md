@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2025-10-21
+
 ### Fixed
 - **Working directory file overwrites**: Fixed issue where multiple CLI calls could overwrite files in the same working directory
   - Implemented numbered subdirectories (1/, 2/, 3/) for all working directories (both temp and user-specified)
