@@ -461,6 +461,19 @@ CHOICE: none
             usage=usage,
         )
 
+    def _prepare_working_directory(self, settings: ClaudeCodeSettings) -> None:
+        """Determine and set working directory early to ensure files are created in correct location.
+
+        This must be called before any file creation (tool results, binary content, etc.)
+
+        Args:
+            settings: Settings dict to update with __working_directory
+        """
+        if "__working_directory" not in settings:
+            working_dir = _determine_working_directory(settings)
+            settings["__working_directory"] = working_dir
+            logger.debug("Prepared working directory: %s", working_dir)
+
     async def _handle_structured_follow_up(
         self,
         messages: list[ModelMessage],
@@ -482,6 +495,9 @@ CHOICE: none
         structured_settings = self.provider.get_settings(model=self._model_name)
         # Disable function selection mode for follow-up
         structured_settings["__function_selection_mode__"] = False
+
+        # Prepare working directory BEFORE assembling prompt (which creates files)
+        self._prepare_working_directory(structured_settings)
 
         output_tools = (
             model_request_parameters.output_tools if model_request_parameters else []
@@ -546,6 +562,9 @@ CHOICE: none
         unstructured_settings = self.provider.get_settings(model=self._model_name)
         # Disable function selection mode for follow-up
         unstructured_settings["__function_selection_mode__"] = False
+
+        # Prepare working directory BEFORE assembling prompt (which creates files)
+        self._prepare_working_directory(unstructured_settings)
 
         system_prompt_parts = []
 

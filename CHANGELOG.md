@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Working directory file overwrites**: Fixed issue where multiple CLI calls could overwrite files in the same working directory
+  - Implemented numbered subdirectories (1/, 2/, 3/) for all working directories (both temp and user-specified)
+  - Pre-determine working directory before creating tool result files or binary content files
+  - Ensures Claude runs from the same directory where files are created
+  - Prevents race conditions and file conflicts during multi-phase operations (tool selection → argument collection → final response)
+  - Added `__temp_base_directory` internal setting to track base directory for numbered subdirectories
+  - Added comprehensive tests: `test_temp_workspace_no_overwrite()` and `test_reused_settings_dict_no_overwrite()`
+
+### Changed
+- **Type safety improvements**: Added proper TypedDict field definition for `__temp_base_directory`
+  - No `type: ignore` comments used
+  - Full mypy compliance with proper type narrowing using `isinstance()` assertions
+
 ## [0.7.1] - 2025-10-19
 
 ### Fixed

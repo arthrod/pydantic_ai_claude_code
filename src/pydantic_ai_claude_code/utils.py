@@ -502,25 +502,40 @@ def _setup_working_directory_and_prompt(
     Returns:
         Working directory path (including call subdirectory)
     """
-    # Get working directory from settings (should already be set)
-    cwd = settings.get("__working_directory") if settings else None
-
-    if not cwd:
-        # Fallback: determine it now if not already set
-        base_dir = settings.get("working_directory") if settings else None
-        if not base_dir:
-            # Create temp directory - this will be the only call, so no subdirectory needed
-            cwd = tempfile.mkdtemp(prefix="claude_prompt_")
-            logger.debug("Created temporary working directory: %s", cwd)
-        else:
-            # User-specified directory - create numbered subdirectory to avoid overwrites
-            Path(base_dir).mkdir(parents=True, exist_ok=True)
-            cwd_path = _get_next_call_subdirectory(base_dir)
-            cwd = str(cwd_path)
-    else:
-        # Directory path already determined, just ensure it exists
-        Path(cwd).mkdir(parents=True, exist_ok=True)
+    # Check if we already determined the working directory for this call
+    # (happens when we pre-create tool result files or binary content files)
+    existing_working_dir = settings.get("__working_directory") if settings else None
+    if existing_working_dir:
+        # Use the pre-determined working directory - don't create a new one
+        cwd = existing_working_dir
         logger.debug("Using pre-determined working directory: %s", cwd)
+        # Ensure it exists
+        Path(cwd).mkdir(parents=True, exist_ok=True)
+    else:
+        # Determine base directory from settings
+        base_dir = settings.get("working_directory") if settings else None
+
+        if not base_dir:
+            # No working directory specified - create temp directory for this session
+            # Check if we already created a temp base directory for these settings
+            existing_temp_base = settings.get("__temp_base_directory") if settings else None
+
+            if not existing_temp_base:
+                # First call with these settings - create new temp base directory
+                existing_temp_base = tempfile.mkdtemp(prefix="claude_prompt_")
+                if settings is not None:
+                    settings["__temp_base_directory"] = existing_temp_base
+                logger.debug("Created temporary base directory: %s", existing_temp_base)
+
+            base_dir = existing_temp_base
+
+        # At this point base_dir is guaranteed to be a string
+        assert isinstance(base_dir, str), "base_dir should be a string by now"
+
+        # Always create numbered subdirectory to prevent overwrites across multiple calls
+        Path(base_dir).mkdir(parents=True, exist_ok=True)
+        cwd_path = _get_next_call_subdirectory(base_dir)
+        cwd = str(cwd_path)
 
     # Copy additional files if specified (before writing prompt.md so they can be referenced)
     additional_files = settings.get("additional_files") if settings else None

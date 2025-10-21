@@ -11,6 +11,7 @@ from pydantic_ai_claude_code.tools import (
     is_tool_call_response,
     parse_tool_calls,
 )
+from pydantic_ai_claude_code.types import ClaudeCodeModelSettings
 
 # Test constants
 EXPECTED_MULTIPLE_TOOL_CALLS = 2  # Expected number of tool calls in multi-call test
@@ -555,7 +556,7 @@ def test_agent_tool_returns_binary_content():
 
         result = agent.run_sync(
             "Generate a test image and tell me what you see in it.",
-            model_settings={"working_directory": tmpdir}
+            model_settings=ClaudeCodeModelSettings(working_directory=tmpdir)
         )
 
         # Verify we got a response
@@ -585,6 +586,6 @@ def test_agent_tool_returns_binary_content():
         print(f"Claude's response: {result.output[:200]}...")
         print(f"Temp directory preserved: {tmpdir}")
 
-    except Exception as e:
+    except Exception:
         print(f"\nTest failed! Temp directory preserved for inspection: {tmpdir}")
         raise

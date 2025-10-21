@@ -82,16 +82,73 @@ def test_multiple_calls_create_separate_subdirectories():
 
 
 def test_temp_workspace_no_overwrite():
-    """Test that temp workspaces don't create subdirectories (only one call per temp dir)."""
-    # Use default (no working_directory specified = uses temp directory)
+    """Test that temp workspaces create numbered subdirectories to prevent overwrites."""
+    # Use provider with temp workspace enabled
+    from pydantic_ai_claude_code import ClaudeCodeProvider
+
+    provider = ClaudeCodeProvider({"use_temp_workspace": True})
+
+    with provider:
+        agent = Agent("claude-code:sonnet")
+
+        # Get settings from provider to use with agent
+        model_settings = ClaudeCodeModelSettings(**provider.get_settings())
+
+        # Get the temp workspace path
+        temp_workspace = Path(provider.working_directory)
+        assert temp_workspace.exists(), "Temp workspace should exist"
+
+        # Make first call
+        result1 = agent.run_sync("What is 1+1?", model_settings=model_settings)
+        assert result1.output is not None, "Expected result output"
+
+        # Check that subdirectory '1' was created
+        subdirs_after_first = sorted([d for d in temp_workspace.iterdir() if d.is_dir()])
+        assert len(subdirs_after_first) == 1, f"Expected 1 subdirectory after first call, found {len(subdirs_after_first)}"
+        assert subdirs_after_first[0].name == "1", f"Expected first subdir '1', got '{subdirs_after_first[0].name}'"
+
+        # Make second call with same settings
+        result2 = agent.run_sync("What is 2+2?", model_settings=model_settings)
+        assert result2.output is not None, "Expected result output"
+
+        # Check that subdirectory '2' was created
+        subdirs_after_second = sorted([d for d in temp_workspace.iterdir() if d.is_dir()])
+        assert len(subdirs_after_second) == EXPECTED_SUBDIR_COUNT_DOUBLE, f"Expected {EXPECTED_SUBDIR_COUNT_DOUBLE} subdirectories after second call, found {len(subdirs_after_second)}"
+        assert subdirs_after_second[1].name == "2", f"Expected second subdir '2', got '{subdirs_after_second[1].name}'"
+
+        # Verify both have their own prompt.md and response.json
+        for subdir in subdirs_after_second:
+            assert (subdir / "prompt.md").exists(), f"{subdir.name}/prompt.md not found"
+            assert (subdir / "response.json").exists(), f"{subdir.name}/response.json not found"
+
+        # Verify the prompts are different
+        prompt1 = (subdirs_after_second[0] / "prompt.md").read_text()
+        prompt2 = (subdirs_after_second[1] / "prompt.md").read_text()
+        assert "1+1" in prompt1, "First prompt should contain '1+1'"
+        assert "2+2" in prompt2, "Second prompt should contain '2+2'"
+        assert prompt1 != prompt2, "Prompts should be different"
+
+
+def test_reused_settings_dict_no_overwrite():
+    """Test that reusing the same settings dict across multiple calls doesn't overwrite files."""
     agent = Agent("claude-code:sonnet")
 
-    # Run query (no model_settings = uses temp directory)
-    result = agent.run_sync("What is 2+2?")
+    # Create a settings dict (no working_directory, so will use temp)
+    settings = ClaudeCodeModelSettings()
 
-    # The working directory should be a temp directory directly
-    # We can't easily check the temp directory from here, but we can verify the result
-    assert result.output is not None, "Expected result output"
+    # Make first call with settings
+    result1 = agent.run_sync("What is 1+1?", model_settings=settings)
+    assert result1.output is not None, "Expected result output"
+
+    # Settings dict now has __temp_base_directory set internally
+    # Make second call with same settings dict
+    result2 = agent.run_sync("What is 2+2?", model_settings=settings)
+    assert result2.output is not None, "Expected result output"
+
+    # We can't easily access the temp directory from here, but we can verify
+    # that both calls succeeded without errors (which would happen if they
+    # tried to write to the same file)
+    assert result1.output != result2.output, "Results should be different"
 
 
 if __name__ == "__main__":

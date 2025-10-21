@@ -163,5 +163,6 @@ class ClaudeCodeSettings(TypedDict, total=False):
     __function_selection_result__: str  # Internal: result of function selection ("none" or "selected")
     __response_file_path: str  # Internal: path to save raw response JSON
     __working_directory: str  # Internal: determined working directory path
+    __temp_base_directory: str  # Internal: base directory for numbered subdirectories in temp workspaces
     __tool_name: str  # Internal: name of tool for argument collection
     __tool_description: str  # Internal: description of tool for argument collection
