@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Additional files not copied in follow-up requests**: Fixed critical bug where `additional_files` specified in `model_settings` were not copied to working directory during follow-up requests in function selection mode
+  - Affected three code paths: structured follow-up, unstructured follow-up, and argument collection
+  - Root cause: Follow-up request handlers created fresh settings dicts without preserving user-provided settings from original request
+  - Solution: Pass original settings through call chain and preserve `additional_files`, `timeout_seconds`, and `debug_save_prompts` in all follow-up paths
+  - Impact: Agents with both `output_type` and `tools` (or just `tools`) that reference files via `additional_files` now work correctly
+  - Added comprehensive test coverage for all three failure scenarios
+
+### Changed
+- **Code quality improvements**: Improved pylint score from 8.89/10 to 9.64/10
+  - Fixed all line-too-long issues via ruff formatting
+  - Added explicit UTF-8 encoding to all file operations
+  - Maintained 100% mypy and ruff compliance
+
 ## [0.7.2] - 2025-10-21
 
 ### Fixed

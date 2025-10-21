@@ -194,20 +194,20 @@ class ClaudeCodeModel(Model):
         """
         from bs4 import BeautifulSoup
 
-        soup = BeautifulSoup(xml_text, 'html.parser')
+        soup = BeautifulSoup(xml_text, "html.parser")
 
-        summary = soup.find('summary')
-        returns = soup.find('returns')
+        summary = soup.find("summary")
+        returns = soup.find("returns")
 
         parts = []
         if summary:
             summary_text = summary.get_text(strip=True)
             # Ensure summary ends with period
-            if summary_text and not summary_text.endswith('.'):
-                summary_text += '.'
+            if summary_text and not summary_text.endswith("."):
+                summary_text += "."
             parts.append(summary_text)
         if returns:
-            desc = returns.find('description')
+            desc = returns.find("description")
             if desc:
                 parts.append(f"Returns: {desc.get_text(strip=True)}")
 
@@ -261,7 +261,9 @@ class ClaudeCodeModel(Model):
             Tuple of (prompt string, available functions dict)
         """
         logger.info("=" * 80)
-        logger.info("BUILDING FUNCTION TOOLS PROMPT - Total tools: %d", len(function_tools))
+        logger.info(
+            "BUILDING FUNCTION TOOLS PROMPT - Total tools: %d", len(function_tools)
+        )
         logger.info("=" * 80)
 
         option_descriptions = self._build_function_option_descriptions(function_tools)
@@ -384,8 +386,8 @@ CHOICE: none
                     )
                     system_prompt_parts.append(json_instruction)
                 else:
-                    unstructured_instruction = self._build_unstructured_output_instruction(
-                        settings
+                    unstructured_instruction = (
+                        self._build_unstructured_output_instruction(settings)
                     )
                     system_prompt_parts.append(unstructured_instruction)
 
@@ -478,12 +480,14 @@ CHOICE: none
         self,
         messages: list[ModelMessage],
         model_request_parameters: ModelRequestParameters,
+        original_settings: ClaudeCodeSettings | None = None,
     ) -> ModelResponse:
         """Handle structured follow-up request when function selection is 'none' but output_type is set.
 
         Args:
             messages: Original message list
             model_request_parameters: Request parameters with output_tools
+            original_settings: Original settings from initial request (to preserve additional_files, etc.)
 
         Returns:
             Model response with structured output
@@ -493,6 +497,22 @@ CHOICE: none
         )
 
         structured_settings = self.provider.get_settings(model=self._model_name)
+
+        # Preserve user-provided settings from original request
+        if original_settings:
+            if "additional_files" in original_settings:
+                structured_settings["additional_files"] = original_settings[
+                    "additional_files"
+                ]
+            if "timeout_seconds" in original_settings:
+                structured_settings["timeout_seconds"] = original_settings[
+                    "timeout_seconds"
+                ]
+            if "debug_save_prompts" in original_settings:
+                structured_settings["debug_save_prompts"] = original_settings[
+                    "debug_save_prompts"
+                ]
+
         # Disable function selection mode for follow-up
         structured_settings["__function_selection_mode__"] = False
 
@@ -545,12 +565,14 @@ CHOICE: none
         self,
         messages: list[ModelMessage],
         model_request_parameters: ModelRequestParameters,
+        original_settings: ClaudeCodeSettings | None = None,
     ) -> ModelResponse:
         """Handle unstructured follow-up request when function selection is 'none'.
 
         Args:
             messages: Original message list
             model_request_parameters: Request parameters
+            original_settings: Original settings from initial request (to preserve additional_files, etc.)
 
         Returns:
             Model response with unstructured output
@@ -560,6 +582,22 @@ CHOICE: none
         )
 
         unstructured_settings = self.provider.get_settings(model=self._model_name)
+
+        # Preserve user-provided settings from original request
+        if original_settings:
+            if "additional_files" in original_settings:
+                unstructured_settings["additional_files"] = original_settings[
+                    "additional_files"
+                ]
+            if "timeout_seconds" in original_settings:
+                unstructured_settings["timeout_seconds"] = original_settings[
+                    "timeout_seconds"
+                ]
+            if "debug_save_prompts" in original_settings:
+                unstructured_settings["debug_save_prompts"] = original_settings[
+                    "debug_save_prompts"
+                ]
+
         # Disable function selection mode for follow-up
         unstructured_settings["__function_selection_mode__"] = False
 
@@ -699,6 +737,7 @@ Please fix the issues above and try again. Follow the directory structure instru
         selected_function: str,
         available_functions: dict[str, Any],
         arg_response_for_usage: ClaudeJSONResponse,
+        original_settings: ClaudeCodeSettings | None = None,
     ) -> tuple[ModelResponse | None, ClaudeCodeSettings, dict[str, Any], str]:
         """Set up argument collection by validating function and building initial prompt.
 
@@ -707,6 +746,7 @@ Please fix the issues above and try again. Follow the directory structure instru
             selected_function: Name of selected function
             available_functions: Dict of available function definitions
             arg_response_for_usage: Response to extract usage from
+            original_settings: Original settings from initial request (to preserve additional_files, etc.)
 
         Returns:
             Tuple of (error_response, arg_settings, schema, arg_prompt).
@@ -721,7 +761,11 @@ Please fix the issues above and try again. Follow the directory structure instru
             return (
                 self._create_model_response_with_usage(
                     arg_response_for_usage,
-                    [TextPart(content=f"Error: Function '{selected_function}' not found")],
+                    [
+                        TextPart(
+                            content=f"Error: Function '{selected_function}' not found"
+                        )
+                    ],
                 ),
                 {},
                 {},
@@ -729,6 +773,18 @@ Please fix the issues above and try again. Follow the directory structure instru
             )
 
         arg_settings = self.provider.get_settings(model=self._model_name)
+
+        # Preserve user-provided settings from original request
+        if original_settings:
+            if "additional_files" in original_settings:
+                arg_settings["additional_files"] = original_settings["additional_files"]
+            if "timeout_seconds" in original_settings:
+                arg_settings["timeout_seconds"] = original_settings["timeout_seconds"]
+            if "debug_save_prompts" in original_settings:
+                arg_settings["debug_save_prompts"] = original_settings[
+                    "debug_save_prompts"
+                ]
+
         schema = tool_def.parameters_json_schema
 
         # Store tool name and description for retry attempts
@@ -798,6 +854,7 @@ Please fix the issues above and try again. Follow the directory structure instru
         selected_function: str,
         available_functions: dict[str, Any],
         arg_response_for_usage: ClaudeJSONResponse,
+        original_settings: ClaudeCodeSettings | None = None,
     ) -> ModelResponse:
         """Handle argument collection for selected function using file/folder structure.
 
@@ -806,13 +863,18 @@ Please fix the issues above and try again. Follow the directory structure instru
             selected_function: Name of selected function
             available_functions: Dict of available function definitions
             arg_response_for_usage: Response to extract usage from
+            original_settings: Original settings from initial request (to preserve additional_files, etc.)
 
         Returns:
             Model response with tool call or error
         """
         error_response, arg_settings, schema, arg_prompt = (
             self._setup_argument_collection(
-                messages, selected_function, available_functions, arg_response_for_usage
+                messages,
+                selected_function,
+                available_functions,
+                arg_response_for_usage,
+                original_settings,
             )
         )
 
@@ -825,12 +887,16 @@ Please fix the issues above and try again. Follow the directory structure instru
         for attempt in range(max_retries + 1):
             if attempt == 0:
                 current_prompt = arg_prompt
-                self._log_argument_collection_attempt(attempt, max_retries, current_prompt, False)
+                self._log_argument_collection_attempt(
+                    attempt, max_retries, current_prompt, False
+                )
             else:
                 current_prompt = self._build_retry_prompt(
                     messages, schema, arg_settings, error_msg or ""
                 )
-                self._log_argument_collection_attempt(attempt, max_retries, current_prompt, True)
+                self._log_argument_collection_attempt(
+                    attempt, max_retries, current_prompt, True
+                )
 
             model_response, error_msg, arg_response = await self._try_collect_arguments(
                 current_prompt,
@@ -983,7 +1049,7 @@ Please fix the issues above and try again. Follow the directory structure instru
                     "making structured follow-up request"
                 )
                 return await self._handle_structured_follow_up(
-                    messages, model_request_parameters
+                    messages, model_request_parameters, settings
                 )
             else:
                 logger.info(
@@ -991,7 +1057,7 @@ Please fix the issues above and try again. Follow the directory structure instru
                     "making unstructured follow-up request"
                 )
                 return await self._handle_unstructured_follow_up(
-                    messages, model_request_parameters
+                    messages, model_request_parameters, settings
                 )
 
         elif selection_result == "selected":
@@ -1005,12 +1071,17 @@ Please fix the issues above and try again. Follow the directory structure instru
                         selected_function,
                     )
                     return await self._handle_argument_collection(
-                        messages, selected_function, available_functions, response
+                        messages,
+                        selected_function,
+                        available_functions,
+                        response,
+                        settings,
                     )
         # Unexpected or missing selection result
         elif selection_result is not None:
             logger.warning(
-                "Unexpected function selection result: %s (expected 'none' or 'selected')",
+                "Unexpected function selection result: %s "
+                "(expected 'none' or 'selected')",
                 selection_result,
             )
 
@@ -1033,14 +1104,19 @@ Please fix the issues above and try again. Follow the directory structure instru
             Model response with embedded usage information
         """
         logger.info(
-            "Starting non-streaming request with %d messages, output_tools=%s, function_tools=%s",
+            "Starting non-streaming request with %d messages, "
+            "output_tools=%s, function_tools=%s",
             len(messages),
-            len(model_request_parameters.output_tools)
-            if model_request_parameters and model_request_parameters.output_tools
-            else 0,
-            len(model_request_parameters.function_tools)
-            if model_request_parameters and model_request_parameters.function_tools
-            else 0,
+            (
+                len(model_request_parameters.output_tools)
+                if model_request_parameters and model_request_parameters.output_tools
+                else 0
+            ),
+            (
+                len(model_request_parameters.function_tools)
+                if model_request_parameters and model_request_parameters.function_tools
+                else 0
+            ),
         )
 
         # Get settings from provider and merge with model_settings from pydantic_ai
@@ -1114,14 +1190,19 @@ Please fix the issues above and try again. Follow the directory structure instru
             Streamed response object
         """
         logger.info(
-            "Starting streaming request with %d messages, output_tools=%s, function_tools=%s",
+            "Starting streaming request with %d messages, "
+            "output_tools=%s, function_tools=%s",
             len(messages),
-            len(model_request_parameters.output_tools)
-            if model_request_parameters and model_request_parameters.output_tools
-            else 0,
-            len(model_request_parameters.function_tools)
-            if model_request_parameters and model_request_parameters.function_tools
-            else 0,
+            (
+                len(model_request_parameters.output_tools)
+                if model_request_parameters and model_request_parameters.output_tools
+                else 0
+            ),
+            (
+                len(model_request_parameters.function_tools)
+                if model_request_parameters and model_request_parameters.function_tools
+                else 0
+            ),
         )
 
         # Get settings from provider and merge with model_settings from pydantic_ai
@@ -1409,7 +1490,7 @@ Then provide your complete response after the marker.
                 logger.debug(
                     "Reading unstructured output from file: %s", unstructured_file
                 )
-                with open(unstructured_file) as f:
+                with open(unstructured_file, encoding="utf-8") as f:
                     file_content = f.read()
                 logger.debug(
                     "Successfully read %d bytes from unstructured output file",
@@ -1593,7 +1674,7 @@ Then provide your complete response after the marker.
 
         # Read file
         try:
-            with open(file_path) as f:
+            with open(file_path, encoding="utf-8") as f:
                 file_content = f.read()
             logger.debug("Read %d bytes from structured output file", len(file_content))
         except Exception as e:
