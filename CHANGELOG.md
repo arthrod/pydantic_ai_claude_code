@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3] - 2025-10-21
+
 ### Fixed
 - **Additional files not copied in follow-up requests**: Fixed critical bug where `additional_files` specified in `model_settings` were not copied to working directory during follow-up requests in function selection mode
   - Affected three code paths: structured follow-up, unstructured follow-up, and argument collection
