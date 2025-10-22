@@ -762,6 +762,85 @@ def _validate_claude_response(response: ClaudeJSONResponse) -> None:
         raise RuntimeError(f"Claude CLI error: {error_msg}")
 
 
+def _classify_execution_error(
+    stdout_text: str,
+    stderr_text: str,
+    returncode: int,
+    elapsed: float,
+    retry_enabled: bool,
+    cwd: str,
+) -> tuple[str, float]:
+    """Classify execution error and determine action.
+
+    Analyzes command output to determine appropriate error handling action.
+
+    Error detection priority (most specific to least specific):
+    1. OAuth errors (requires JSON + specific keywords) - raise immediately
+    2. Rate limit errors (regex pattern) - return retry action with wait time
+    3. Infrastructure failures (stderr patterns) - return retry action
+    4. Generic errors - raise
+
+    Args:
+        stdout_text: stdout from command
+        stderr_text: stderr from command
+        returncode: Process return code
+        elapsed: Execution time in seconds
+        retry_enabled: Whether rate limit retry is enabled
+        cwd: Working directory
+
+    Returns:
+        Tuple of (action, wait_seconds) where:
+        - action: "retry_rate_limit", "retry_infra", or raises exception
+        - wait_seconds: How long to wait (for rate limit retries only)
+
+    Raises:
+        ClaudeOAuthError: If OAuth error detected
+        RuntimeError: If generic error detected
+    """
+    # Priority 1: Check OAuth errors first (most specific)
+    is_oauth_error, oauth_message = detect_oauth_error(stdout_text, stderr_text)
+    if is_oauth_error and oauth_message:
+        raise ClaudeOAuthError(
+            f"Claude CLI authentication expired after {elapsed:.1f}s: {oauth_message}",
+            reauth_instruction=oauth_message if "/login" in oauth_message else "Please run /login"
+        )
+
+    # Priority 2: Check rate limit (less specific, could have false positives)
+    should_retry, wait_seconds = _check_rate_limit(stdout_text, stderr_text, returncode, retry_enabled)
+    if should_retry:
+        return ("retry_rate_limit", wait_seconds)
+
+    # Priority 3: Check for infrastructure failures
+    if detect_cli_infrastructure_failure(stderr_text):
+        return ("retry_infra", 0.0)
+
+    # Priority 4: Generic error handling (raises exception)
+    _handle_command_failure(stdout_text, stderr_text, returncode, elapsed, 0, cwd)
+    # If we get here, _handle_command_failure should have raised an exception
+    raise RuntimeError("Unexpected: _handle_command_failure should have raised")
+
+
+def _process_successful_response(
+    stdout_text: str,
+    settings: ClaudeCodeSettings | None = None,
+) -> ClaudeJSONResponse:
+    """Process successful CLI response.
+
+    Parses, validates, and saves the response.
+
+    Args:
+        stdout_text: Raw stdout from CLI
+        settings: Optional settings for saving response
+
+    Returns:
+        Parsed and validated Claude JSON response
+    """
+    response = _parse_json_response(stdout_text)
+    _validate_claude_response(response)
+    _save_raw_response_to_working_dir(response, settings)
+    return response
+
+
 def _try_sync_execution_with_rate_limit_retry(
     cmd: list[str],
     cwd: str,
@@ -771,11 +850,8 @@ def _try_sync_execution_with_rate_limit_retry(
 ) -> tuple[ClaudeJSONResponse | None, bool]:
     """Try command execution with rate limit retry.
 
-    Error detection priority (most specific to least specific):
-    1. OAuth errors (requires JSON + specific keywords) - raise immediately
-    2. Rate limit errors (regex pattern) - wait and retry
-    3. Infrastructure failures (stderr patterns) - signal retry
-    4. Generic errors - raise
+    Uses shared error classification logic to handle OAuth, rate limit,
+    infrastructure, and generic errors.
 
     Returns:
         Tuple of (response if successful or None, should_retry_infra)
@@ -790,33 +866,20 @@ def _try_sync_execution_with_rate_limit_retry(
             stdout_text = result.stdout if result.stdout else ""
             stderr_text = result.stderr if result.stderr else ""
 
-            # Priority 1: Check OAuth errors first (most specific)
-            is_oauth_error, oauth_message = detect_oauth_error(stdout_text, stderr_text)
-            if is_oauth_error and oauth_message:
-                raise ClaudeOAuthError(
-                    f"Claude CLI authentication expired after {elapsed:.1f}s: {oauth_message}",
-                    reauth_instruction=oauth_message if "/login" in oauth_message else "Please run /login"
-                )
+            # Classify error and get action (may raise exception)
+            action, wait_seconds = _classify_execution_error(
+                stdout_text, stderr_text, result.returncode, elapsed, retry_enabled, cwd
+            )
 
-            # Priority 2: Check rate limit (less specific, could have false positives)
-            should_retry, wait_seconds = _check_rate_limit(stdout_text, stderr_text, result.returncode, retry_enabled)
-            if should_retry:
-                time.sleep(wait_seconds)
+            if action == "retry_rate_limit":
+                time.sleep(int(wait_seconds))
                 logger.info("Wait complete, retrying...")
                 continue
-
-            # Priority 3: Check for infrastructure failures
-            if detect_cli_infrastructure_failure(stderr_text):
-                # Signal to retry in outer loop
+            elif action == "retry_infra":
                 return None, True
 
-            # Priority 4: Generic error handling
-            _handle_command_failure(stdout_text, stderr_text, result.returncode, elapsed, 0, cwd)
-
-        # Success - parse and return
-        response = _parse_json_response(result.stdout)
-        _validate_claude_response(response)
-        _save_raw_response_to_working_dir(response, settings)
+        # Success - process and return
+        response = _process_successful_response(result.stdout, settings)
         return response, False
 
 
@@ -958,11 +1021,8 @@ async def _try_async_execution_with_rate_limit_retry(
 ) -> tuple[ClaudeJSONResponse | None, bool]:
     """Try async command execution with rate limit retry.
 
-    Error detection priority (most specific to least specific):
-    1. OAuth errors (requires JSON + specific keywords) - raise immediately
-    2. Rate limit errors (regex pattern) - wait and retry
-    3. Infrastructure failures (stderr patterns) - signal retry
-    4. Generic errors - raise
+    Uses shared error classification logic to handle OAuth, rate limit,
+    infrastructure, and generic errors.
 
     Returns:
         Tuple of (response if successful or None, should_retry_infra)
@@ -978,33 +1038,20 @@ async def _try_async_execution_with_rate_limit_retry(
             stdout_text = stdout.decode() if stdout else ""
             stderr_text = stderr.decode() if stderr else ""
 
-            # Priority 1: Check OAuth errors first (most specific)
-            is_oauth_error, oauth_message = detect_oauth_error(stdout_text, stderr_text)
-            if is_oauth_error and oauth_message:
-                raise ClaudeOAuthError(
-                    f"Claude CLI authentication expired after {elapsed:.1f}s: {oauth_message}",
-                    reauth_instruction=oauth_message if "/login" in oauth_message else "Please run /login"
-                )
+            # Classify error and get action (may raise exception)
+            action, wait_seconds = _classify_execution_error(
+                stdout_text, stderr_text, returncode, elapsed, retry_enabled, cwd
+            )
 
-            # Priority 2: Check rate limit (less specific, could have false positives)
-            should_retry, wait_seconds = _check_rate_limit(stdout_text, stderr_text, returncode, retry_enabled)
-            if should_retry:
-                await asyncio.sleep(wait_seconds)
+            if action == "retry_rate_limit":
+                await asyncio.sleep(int(wait_seconds))
                 logger.info("Wait complete, retrying...")
                 continue
-
-            # Priority 3: Check for infrastructure failures
-            if detect_cli_infrastructure_failure(stderr_text):
-                # Signal to retry in outer loop
+            elif action == "retry_infra":
                 return None, True
 
-            # Priority 4: Generic error handling
-            _handle_command_failure(stdout_text, stderr_text, returncode, elapsed, 0, cwd)
-
-        # Success - parse and return
-        response = _parse_json_response(stdout.decode())
-        _validate_claude_response(response)
-        _save_raw_response_to_working_dir(response, settings)
+        # Success - process and return
+        response = _process_successful_response(stdout.decode(), settings)
         return response, False
 
 
