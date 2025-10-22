@@ -665,7 +665,15 @@ Create a subfolder, then create appropriately named files for values **OR** subf
 > - Create the **COMPLETE** file/folder structure with ALL required information
 > - Do **NOT** leave any subfolders for labelled items empty or files missing
 > - Do **NOT** write any structured text formats (like JSON, YAML, etc.) - use the file/folder structure only
-> - **After creating files/folders, review your output** to ensure it's consistent, valid, and complete according to the requirements and information provided"""
+> - **After creating files/folders, review your output** to ensure it's consistent, valid, and complete according to the requirements and information provided
+
+---
+
+## The User's Request
+
+**Extract information FROM the following request and organize it into the file structure:**
+
+"""
 
     return instructions
 

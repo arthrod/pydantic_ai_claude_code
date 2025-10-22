@@ -130,7 +130,15 @@ class ClaudeCodeModel(Model):
 
 ---
 
-> **IMPORTANT:** All output must go to the file path specified above."""
+> **IMPORTANT:** All output must go to the file path specified above.
+
+---
+
+## The User's Request
+
+**The following is the user's request. Write your answer to this request to the file:**
+
+"""
 
         return instruction
 
@@ -315,7 +323,15 @@ CHOICE: none
 > **CRITICAL:**
 > - Do NOT include explanations or reasoning
 > - Do NOT try to execute these functions - they are not built-in tools
-> - You are ONLY making a selection"""
+> - You are ONLY making a selection
+
+---
+
+## The User's Request
+
+**The following is the user's request. Analyze it to determine which function(s) to call:**
+
+"""
 
         available_functions = {tool.name: tool for tool in function_tools}
         return prompt, available_functions
@@ -345,6 +361,16 @@ CHOICE: none
         function_tools = (
             model_request_parameters.function_tools if model_request_parameters else []
         )
+
+        # Add tool synthesis instruction when tool results are present
+        if has_tool_results:
+            tool_synthesis_instruction = """# Task: Synthesize Tool Results
+
+**Tool result files are provided below in the conversation. Read these files and use the information to answer the user's request naturally.**
+
+---
+"""
+            system_prompt_parts.append(tool_synthesis_instruction)
 
         # Only include user's custom system prompt if we don't have tool results yet
         if (

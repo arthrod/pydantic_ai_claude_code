@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Prompt clarity improvements**: Added bracketing and contextualization to all major prompts to clearly distinguish instructions from user data
+  - Function Selection prompt: Added "The User's Request" header before user input to prevent instruction confusion
+  - Unstructured Output prompt: Added explicit marker "Write your answer to this request to the file"
+  - Argument Collection & Structured Output prompts: Added "Extract information FROM the following request" to clarify data source
+  - Tool Return Composition: Added "Task: Synthesize Tool Results" instruction to guide response synthesis
+  - Impact: Reduces ambiguity where Claude might interpret user requests as additional instructions rather than data to operate on
+  - Pattern creates clear zones: instructions → data marker → payload → operation reminder
+
 ## [0.7.3] - 2025-10-21
 
 ### Fixed
