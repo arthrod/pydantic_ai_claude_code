@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.4] - 2025-10-22
+
 ### Changed
 - **Prompt clarity improvements**: Added bracketing and contextualization to all major prompts to clearly distinguish instructions from user data
   - Function Selection prompt: Added "The User's Request" header before user input to prevent instruction confusion
