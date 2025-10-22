@@ -9,6 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, cast
 
+from .utils import convert_primitive_value
+
 
 def _resolve_schema_ref(field_schema: dict[str, Any], root_schema: dict[str, Any]) -> dict[str, Any]:
     """Resolve $ref references in JSON schema.
@@ -311,26 +313,17 @@ def _read_scalar_field(
 
     content = file_path.read_text().strip()
 
-    try:
-        if field_type == "integer":
-            return int(content)
-        elif field_type == "number":
-            # Preserve integer vs float distinction
-            if "." in content or "e" in content.lower():
-                return float(content)
-            return int(content)
-        elif field_type == "boolean":
-            return content.lower() in ("true", "1", "yes")
-        else:  # string
-            return content
-    except ValueError as e:
+    converted = convert_primitive_value(content, field_type)
+    if converted is None:
         type_desc = _get_type_description(field_type)
         raise RuntimeError(
             f"Invalid content in file: {file_path}\n"
             f"Expected: {type_desc}\n"
             f"Found: '{content}'\n"
             f"Fix the file content to match the expected format."
-        ) from e
+        )
+
+    return converted
 
 
 def _read_array_of_objects(
@@ -425,26 +418,17 @@ def _read_array_of_primitives(
     for idx, file_path in file_map.items():
         content = file_path.read_text().strip()
 
-        try:
-            if item_type == "integer":
-                items[idx] = int(content)
-            elif item_type == "number":
-                if "." in content or "e" in content.lower():
-                    items[idx] = float(content)
-                else:
-                    items[idx] = int(content)
-            elif item_type == "boolean":
-                items[idx] = content.lower() in ("true", "1", "yes")
-            else:  # string
-                items[idx] = content
-        except ValueError as e:
+        converted = convert_primitive_value(content, item_type)
+        if converted is None:
             type_desc = _get_type_description(item_type)
             raise RuntimeError(
                 f"Invalid content in file: {file_path}\n"
                 f"Expected: {type_desc}\n"
                 f"Found: '{content}'\n"
                 f"Fix the file content to match the expected format."
-            ) from e
+            )
+
+        items[idx] = converted
 
     return items
 
@@ -671,7 +655,7 @@ Create a subfolder, then create appropriately named files for values **OR** subf
 
 ## The User's Request
 
-**Extract information FROM the following request and organize it into the file structure:**
+**Use the Read tool to read the file `user_request.md`. Extract the information FROM that request and organize it into the file structure specified above.**
 
 """
 

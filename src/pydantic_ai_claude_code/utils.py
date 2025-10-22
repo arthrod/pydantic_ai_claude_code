@@ -24,6 +24,49 @@ MAX_CLI_RETRIES = 3  # Maximum retries for transient CLI infrastructure failures
 RETRY_BACKOFF_BASE = 2  # Exponential backoff base (seconds)
 
 
+def convert_primitive_value(
+    value: str, field_type: str
+) -> int | float | bool | str | None:
+    """Convert string value to typed primitive.
+
+    Centralized type conversion used throughout the codebase for consistent
+    handling of JSON schema type conversion.
+
+    Args:
+        value: String value to convert
+        field_type: Target type (integer, number, boolean, string)
+
+    Returns:
+        Converted value or None if conversion fails
+
+    Examples:
+        >>> convert_primitive_value("42", "integer")
+        42
+        >>> convert_primitive_value("3.14", "number")
+        3.14
+        >>> convert_primitive_value("true", "boolean")
+        True
+        >>> convert_primitive_value("hello", "string")
+        'hello'
+    """
+    try:
+        if field_type == "integer":
+            return int(value)
+        elif field_type == "number":
+            # Preserve integer vs float distinction
+            if "." in value or "e" in value.lower():
+                return float(value)
+            return int(value)
+        elif field_type == "boolean":
+            return value.lower() in ("true", "1", "yes")
+        elif field_type == "string":
+            return value
+    except (ValueError, AttributeError):
+        pass
+
+    return None
+
+
 def strip_markdown_code_fence(text: str) -> str:
     """Remove markdown code fence markers from text.
 
@@ -599,20 +642,22 @@ def _execute_sync_command(
         ) from None
 
 
-def _check_rate_limit_and_retry(
-    result: subprocess.CompletedProcess[str], retry_enabled: bool
+def _check_rate_limit(
+    stdout_text: str, stderr_text: str, returncode: int, retry_enabled: bool
 ) -> tuple[bool, int]:
     """Check if command hit rate limit and should retry.
 
     Args:
-        result: Subprocess result
+        stdout_text: Standard output text (decoded)
+        stderr_text: Standard error text (decoded)
+        returncode: Process return code
         retry_enabled: Whether retry is enabled
 
     Returns:
         Tuple of (should_retry, wait_seconds)
     """
-    if result.returncode != 0 and retry_enabled:
-        error_output = result.stdout + "\n" + result.stderr
+    if returncode != 0 and retry_enabled:
+        error_output = stdout_text + "\n" + stderr_text
         is_rate_limited, reset_time = detect_rate_limit(error_output)
 
         if is_rate_limited and reset_time:
@@ -624,8 +669,13 @@ def _check_rate_limit_and_retry(
     return False, 0
 
 
-def _handle_sync_command_failure(
-    result: subprocess.CompletedProcess[str], elapsed: float, prompt_len: int, cwd: str
+def _handle_command_failure(
+    stdout_text: str,
+    stderr_text: str,
+    returncode: int,
+    elapsed: float,
+    prompt_len: int,
+    cwd: str,
 ) -> None:
     """Handle failed command execution with generic error.
 
@@ -633,7 +683,9 @@ def _handle_sync_command_failure(
     before calling this function. This handles remaining generic errors.
 
     Args:
-        result: Failed subprocess result
+        stdout_text: Standard output text (decoded)
+        stderr_text: Standard error text (decoded)
+        returncode: Process return code
         elapsed: Elapsed time in seconds
         prompt_len: Length of prompt
         cwd: Working directory
@@ -641,8 +693,7 @@ def _handle_sync_command_failure(
     Raises:
         RuntimeError: Always raises with appropriate error message
     """
-    stderr_text = result.stderr if result.stderr else "(no error output)"
-    stdout_text = result.stdout if result.stdout else ""
+    stderr = stderr_text if stderr_text else "(no error output)"
 
     logger.error(
         "Claude CLI failed after %.1fs with return code %d\n"
@@ -651,19 +702,19 @@ def _handle_sync_command_failure(
         "Stderr: %s\n"
         "Stdout (first 500 chars): %s",
         elapsed,
-        result.returncode,
+        returncode,
         prompt_len,
         cwd,
-        stderr_text,
-        stdout_text[:500],
+        stderr,
+        stdout_text[:500] if stdout_text else "",
     )
 
     # Generic error handling
-    error_msg = _format_cli_error_message(elapsed, result.returncode, stderr_text)
+    error_msg = _format_cli_error_message(elapsed, returncode, stderr)
     raise RuntimeError(error_msg)
 
 
-def _parse_sync_json_response(raw_stdout: str) -> ClaudeJSONResponse:
+def _parse_json_response(raw_stdout: str) -> ClaudeJSONResponse:
     """Parse JSON response from Claude CLI output.
 
     Args:
@@ -748,7 +799,7 @@ def _try_sync_execution_with_rate_limit_retry(
                 )
 
             # Priority 2: Check rate limit (less specific, could have false positives)
-            should_retry, wait_seconds = _check_rate_limit_and_retry(result, retry_enabled)
+            should_retry, wait_seconds = _check_rate_limit(stdout_text, stderr_text, result.returncode, retry_enabled)
             if should_retry:
                 time.sleep(wait_seconds)
                 logger.info("Wait complete, retrying...")
@@ -760,10 +811,10 @@ def _try_sync_execution_with_rate_limit_retry(
                 return None, True
 
             # Priority 4: Generic error handling
-            _handle_sync_command_failure(result, elapsed, 0, cwd)
+            _handle_command_failure(stdout_text, stderr_text, result.returncode, elapsed, 0, cwd)
 
         # Success - parse and return
-        response = _parse_sync_json_response(result.stdout)
+        response = _parse_json_response(result.stdout)
         _validate_claude_response(response)
         _save_raw_response_to_working_dir(response, settings)
         return response, False
@@ -898,73 +949,6 @@ async def _execute_async_command(
         ) from None
 
 
-async def _check_rate_limit_and_retry_async(
-    stdout: bytes, stderr: bytes, returncode: int, retry_enabled: bool
-) -> tuple[bool, int]:
-    """Check if command hit rate limit and should retry (async version).
-
-    Args:
-        stdout: Process stdout
-        stderr: Process stderr
-        returncode: Process return code
-        retry_enabled: Whether retry is enabled
-
-    Returns:
-        Tuple of (should_retry, wait_seconds)
-    """
-    if returncode != 0 and retry_enabled:
-        error_output = stdout.decode() + "\n" + stderr.decode()
-        is_rate_limited, reset_time = detect_rate_limit(error_output)
-
-        if is_rate_limited and reset_time:
-            wait_seconds = calculate_wait_time(reset_time)
-            wait_minutes = wait_seconds // 60
-            logger.info("Rate limit hit. Waiting %d minutes until reset...", wait_minutes)
-            return True, wait_seconds
-
-    return False, 0
-
-
-def _handle_async_command_failure(
-    process_output: tuple[bytes, bytes, int], elapsed: float, prompt_len: int, cwd: str
-) -> None:
-    """Handle failed async command execution with generic error.
-
-    Note: Specific errors (OAuth, rate limit, infrastructure) should be checked
-    before calling this function. This handles remaining generic errors.
-
-    Args:
-        process_output: Tuple of (stdout, stderr, returncode) from process
-        elapsed: Elapsed time in seconds
-        prompt_len: Length of prompt
-        cwd: Working directory
-
-    Raises:
-        RuntimeError: Always raises with appropriate error message
-    """
-    stdout, stderr, returncode = process_output
-    stderr_text = stderr.decode() if stderr else "(no error output)"
-    stdout_text = stdout.decode() if stdout else ""
-
-    logger.error(
-        "Claude CLI failed after %.1fs with return code %d\n"
-        "Prompt length: %d chars\n"
-        "Working dir: %s\n"
-        "Stderr: %s\n"
-        "Stdout (first 500 chars): %s",
-        elapsed,
-        returncode,
-        prompt_len,
-        cwd,
-        stderr_text,
-        stdout_text[:500],
-    )
-
-    # Generic error handling
-    error_msg = _format_cli_error_message(elapsed, returncode, stderr_text)
-    raise RuntimeError(error_msg)
-
-
 async def _try_async_execution_with_rate_limit_retry(
     cmd: list[str],
     cwd: str,
@@ -1003,9 +987,7 @@ async def _try_async_execution_with_rate_limit_retry(
                 )
 
             # Priority 2: Check rate limit (less specific, could have false positives)
-            should_retry, wait_seconds = await _check_rate_limit_and_retry_async(
-                stdout, stderr, returncode, retry_enabled
-            )
+            should_retry, wait_seconds = _check_rate_limit(stdout_text, stderr_text, returncode, retry_enabled)
             if should_retry:
                 await asyncio.sleep(wait_seconds)
                 logger.info("Wait complete, retrying...")
@@ -1017,10 +999,10 @@ async def _try_async_execution_with_rate_limit_retry(
                 return None, True
 
             # Priority 4: Generic error handling
-            _handle_async_command_failure(process_output, elapsed, 0, cwd)
+            _handle_command_failure(stdout_text, stderr_text, returncode, elapsed, 0, cwd)
 
         # Success - parse and return
-        response = _parse_sync_json_response(stdout.decode())
+        response = _parse_json_response(stdout.decode())
         _validate_claude_response(response)
         _save_raw_response_to_working_dir(response, settings)
         return response, False

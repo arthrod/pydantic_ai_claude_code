@@ -43,6 +43,7 @@ from .types import ClaudeCodeSettings, ClaudeJSONResponse
 from .utils import (
     _determine_working_directory,
     build_claude_command,
+    convert_primitive_value,
     run_claude_async,
     strip_markdown_code_fence,
 )
@@ -78,6 +79,28 @@ class ClaudeCodeModel(Model):
         self.provider = provider or ClaudeCodeProvider()
 
         logger.debug("Initialized ClaudeCodeModel with model_name=%s", model_name)
+
+    @staticmethod
+    def _preserve_user_settings(
+        original_settings: ClaudeCodeSettings | None,
+        new_settings: ClaudeCodeSettings,
+    ) -> None:
+        """Preserve user-provided settings from original request to new settings.
+
+        Args:
+            original_settings: Original settings dict (may be None)
+            new_settings: New settings dict to update with preserved values
+        """
+        if not original_settings:
+            return
+
+        # Preserve user-provided settings
+        if "additional_files" in original_settings:
+            new_settings["additional_files"] = original_settings["additional_files"]
+        if "timeout_seconds" in original_settings:
+            new_settings["timeout_seconds"] = original_settings["timeout_seconds"]
+        if "debug_save_prompts" in original_settings:
+            new_settings["debug_save_prompts"] = original_settings["debug_save_prompts"]
 
     @property
     def model_name(self) -> str:
@@ -136,7 +159,7 @@ class ClaudeCodeModel(Model):
 
 ## The User's Request
 
-**The following is the user's request. Write your answer to this request to the file:**
+**Use the Read tool to read the file `user_request.md`. This contains the user's request. Write your response to that request to the output file specified above.**
 
 """
 
@@ -329,7 +352,7 @@ CHOICE: none
 
 ## The User's Request
 
-**The following is the user's request. Analyze it to determine which function(s) to call:**
+**Use the Read tool to read the file `user_request.md`. This contains the user's request. Analyze it to determine which function(s) to call.**
 
 """
 
@@ -428,6 +451,9 @@ CHOICE: none
     ) -> str:
         """Assemble final prompt with system instructions.
 
+        User messages are written to user_request.md file for maximum separation
+        between instructions and data.
+
         Args:
             messages: Message list
             system_prompt_parts: System prompt parts to prepend
@@ -435,33 +461,48 @@ CHOICE: none
             has_tool_results: Whether to skip system prompt in messages
 
         Returns:
-            Final assembled prompt string
+            Final assembled prompt string (instructions only, references user_request.md)
         """
-        # Get working directory from settings for tool result files
+        # Get working directory from settings for user request file
         working_dir = settings.get("__working_directory", "/tmp")
 
-        prompt = format_messages_for_claude(
+        # Format user messages and get tool result files
+        format_result = format_messages_for_claude(
             messages, skip_system_prompt=has_tool_results, working_dir=working_dir
         )
-        logger.debug("Formatted prompt length: %d chars", len(prompt))
+        logger.debug("Formatted user messages length: %d chars", len(format_result.formatted_text))
+        logger.debug("Tool result files: %s", format_result.tool_result_files)
 
-        # Prepend system instructions
+        # Write user messages to separate file for maximum separation
+        user_request_path = Path(working_dir) / "user_request.md"
+        user_request_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(user_request_path, "w", encoding="utf-8") as f:
+            f.write(format_result.formatted_text)
+        logger.debug("Wrote user messages to: %s", user_request_path)
+
+        # Store tool result files list for later use in synthesis instruction
+        settings["__tool_result_files"] = format_result.tool_result_files
+
+        # Build prompt with system instructions only (references user_request.md)
+        prompt = ""
+
+        # Include user-specified append_system_prompt first
+        existing_prompt = settings.get("append_system_prompt")
+        if existing_prompt:
+            prompt = f"{existing_prompt}\n\n"
+            settings.pop("append_system_prompt", None)
+            logger.debug(
+                "Added %d chars of user system prompt to prompt",
+                len(existing_prompt),
+            )
+
+        # Add system instructions
         if system_prompt_parts:
             combined_system_prompt = "\n\n".join(system_prompt_parts)
-            prompt = f"{combined_system_prompt}\n\n{prompt}"
+            prompt = f"{prompt}{combined_system_prompt}"
             logger.debug(
                 "Added %d chars of system instructions to prompt",
                 len(combined_system_prompt),
-            )
-
-        # Include user-specified append_system_prompt
-        existing_prompt = settings.get("append_system_prompt")
-        if existing_prompt:
-            prompt = f"{existing_prompt}\n\n{prompt}"
-            settings.pop("append_system_prompt", None)
-            logger.debug(
-                "Added %d chars of user system prompt to prompt file",
-                len(existing_prompt),
             )
 
         return prompt
@@ -525,19 +566,7 @@ CHOICE: none
         structured_settings = self.provider.get_settings(model=self._model_name)
 
         # Preserve user-provided settings from original request
-        if original_settings:
-            if "additional_files" in original_settings:
-                structured_settings["additional_files"] = original_settings[
-                    "additional_files"
-                ]
-            if "timeout_seconds" in original_settings:
-                structured_settings["timeout_seconds"] = original_settings[
-                    "timeout_seconds"
-                ]
-            if "debug_save_prompts" in original_settings:
-                structured_settings["debug_save_prompts"] = original_settings[
-                    "debug_save_prompts"
-                ]
+        self._preserve_user_settings(original_settings, structured_settings)
 
         # Disable function selection mode for follow-up
         structured_settings["__function_selection_mode__"] = False
@@ -610,19 +639,7 @@ CHOICE: none
         unstructured_settings = self.provider.get_settings(model=self._model_name)
 
         # Preserve user-provided settings from original request
-        if original_settings:
-            if "additional_files" in original_settings:
-                unstructured_settings["additional_files"] = original_settings[
-                    "additional_files"
-                ]
-            if "timeout_seconds" in original_settings:
-                unstructured_settings["timeout_seconds"] = original_settings[
-                    "timeout_seconds"
-                ]
-            if "debug_save_prompts" in original_settings:
-                unstructured_settings["debug_save_prompts"] = original_settings[
-                    "debug_save_prompts"
-                ]
+        self._preserve_user_settings(original_settings, unstructured_settings)
 
         # Disable function selection mode for follow-up
         unstructured_settings["__function_selection_mode__"] = False
@@ -703,11 +720,17 @@ PREVIOUS ATTEMPT HAD ERRORS:
 
 Please fix the issues above and try again. Follow the directory structure instructions carefully."""
 
-        messages_prompt = format_messages_for_claude(
+        # Write user messages to user_request.md
+        format_result = format_messages_for_claude(
             messages, skip_system_prompt=True, working_dir=working_dir
         )
+        user_request_path = Path(working_dir) / "user_request.md"
+        user_request_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(user_request_path, "w", encoding="utf-8") as f:
+            f.write(format_result.formatted_text)
+        logger.debug("Wrote user messages for retry to: %s", user_request_path)
 
-        return f"{instruction}\n\n{messages_prompt}\n\n{retry_instruction}"
+        return f"{instruction}\n\n{retry_instruction}"
 
     async def _try_collect_arguments(
         self,
@@ -801,15 +824,7 @@ Please fix the issues above and try again. Follow the directory structure instru
         arg_settings = self.provider.get_settings(model=self._model_name)
 
         # Preserve user-provided settings from original request
-        if original_settings:
-            if "additional_files" in original_settings:
-                arg_settings["additional_files"] = original_settings["additional_files"]
-            if "timeout_seconds" in original_settings:
-                arg_settings["timeout_seconds"] = original_settings["timeout_seconds"]
-            if "debug_save_prompts" in original_settings:
-                arg_settings["debug_save_prompts"] = original_settings[
-                    "debug_save_prompts"
-                ]
+        self._preserve_user_settings(original_settings, arg_settings)
 
         schema = tool_def.parameters_json_schema
 
@@ -825,11 +840,19 @@ Please fix the issues above and try again. Follow the directory structure instru
         instruction = self._build_argument_collection_instruction(
             schema, arg_settings, tool_def.name, tool_def.description
         )
-        arg_prompt = format_messages_for_claude(
+
+        # Format messages and write to user_request.md
+        format_result = format_messages_for_claude(
             messages, skip_system_prompt=True, working_dir=working_dir
         )
+        user_request_path = Path(working_dir) / "user_request.md"
+        user_request_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(user_request_path, "w", encoding="utf-8") as f:
+            f.write(format_result.formatted_text)
+        logger.debug("Wrote user messages to: %s", user_request_path)
 
-        arg_prompt = f"{instruction}\n\n{arg_prompt}"
+        # Build prompt with just the instruction (references user_request.md)
+        arg_prompt = instruction
 
         existing_prompt = arg_settings.get("append_system_prompt")
         if existing_prompt:
@@ -1278,11 +1301,11 @@ Please fix the issues above and try again. Follow the directory structure instru
             messages, system_prompt_parts, settings, has_tool_results
         )
 
-        # Add streaming marker instruction
+        # Add streaming marker instruction and user request reference
         streaming_marker = "<<<STREAM_START>>>"
-        prompt = f"""IMPORTANT: Begin your response with the exact marker: {streaming_marker}
+        prompt = f"""Begin with the marker "{streaming_marker}" on its own line, then provide your response.
 
-Then provide your complete response after the marker.
+Use the Read tool to read `user_request.md` for the user's request.
 
 {prompt}"""
         settings["__streaming_marker__"] = streaming_marker  # type: ignore[typeddict-unknown-key]
@@ -1827,32 +1850,6 @@ Then provide your complete response after the marker.
 
         return None
 
-    @staticmethod
-    def _convert_primitive_value(
-        value: str, field_type: str
-    ) -> int | float | bool | str | None:
-        """Convert string value to typed primitive.
-
-        Args:
-            value: String value to convert
-            field_type: Target type (integer, number, boolean, string)
-
-        Returns:
-            Converted value or None if conversion fails
-        """
-        try:
-            if field_type == "integer":
-                return int(value)
-            if field_type == "number":
-                return float(value)
-            if field_type == "boolean":
-                return value.lower() in ("true", "1", "yes")
-            if field_type == "string":
-                return value
-        except (ValueError, AttributeError):
-            pass
-
-        return None
 
     def _try_single_field_autowrap(
         self, text: str, schema: dict[str, Any]
@@ -1911,7 +1908,7 @@ Then provide your complete response after the marker.
             value = value[1:-1]
 
         # Type conversion
-        converted = ClaudeCodeModel._convert_primitive_value(value, field_type)
+        converted = convert_primitive_value(value, field_type)
         if converted is not None:
             return {field_name: converted}
 
