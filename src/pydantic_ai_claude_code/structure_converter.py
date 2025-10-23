@@ -561,6 +561,8 @@ mkdir -p {temp_dir}
 
 ## How to Organize Information
 
+**IMPORTANT:** The following sections explain HOW to format and represent data in the file structure. These are formatting guidelines, NOT instructions about WHAT content to create. Your actual task and the content to extract will come from reading `user_request.md` below.
+
 ### 1. Text Values
 Write to a `.txt` file containing the text content.
 
@@ -644,8 +646,9 @@ Create a subfolder, then create appropriately named files for values **OR** subf
 ---
 {function_context}
 > **CRITICAL:**
-> - Read the request below carefully
-> - Extract **ALL** necessary values, names, and data from the request text
+> - **FIRST:** Read the file `user_request.md` to understand your actual task
+> - Extract **ALL** necessary values, names, and data from `user_request.md`
+> - Populate content fields with actual information from the request
 > - Create the **COMPLETE** file/folder structure with ALL required information
 > - Do **NOT** leave any subfolders for labelled items empty or files missing
 > - Do **NOT** write any structured text formats (like JSON, YAML, etc.) - use the file/folder structure only
@@ -653,9 +656,15 @@ Create a subfolder, then create appropriately named files for values **OR** subf
 
 ---
 
-## The User's Request
+## Your Actual Task
 
-**Use the Read tool to read the file `user_request.md`. Extract the information FROM that request and organize it into the file structure specified above.**
+**STEP 1:** Use the Read tool to read the file `user_request.md`
+
+**STEP 2:** That file contains your actual task and the data you need to work with
+
+**STEP 3:** Extract the information FROM that request and organize it into the file structure specified above
+
+**Remember:** The formatting guidelines above tell you HOW to organize data. The file `user_request.md` tells you WHAT data to organize.
 
 """
 
