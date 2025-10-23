@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.8.0] - 2025-10-23
 
+## [0.8.0] - 2025-10-23
+
 ### Added
 - **Sandbox mode enabled by default**: Claude Code now runs in sandboxed environment by default using Anthropic's `sandbox-runtime` (srt)
   - OS-level isolation via bubblewrap (Linux) or sandbox-exec (macOS)
