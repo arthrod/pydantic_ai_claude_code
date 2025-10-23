@@ -36,12 +36,16 @@ def test_response_saved_to_working_directory():
         subdir = subdirs[0]
         assert subdir.name == "1", f"Expected subdir '1', got '{subdir.name}'"
 
-        # Check that prompt.md exists
+        # Check that prompt.md exists (contains system instructions)
         prompt_file = subdir / "prompt.md"
         assert prompt_file.exists(), "prompt.md not found"
-        prompt_content = prompt_file.read_text()
-        assert len(prompt_content) > 0, "prompt.md is empty"
-        assert "2+2" in prompt_content, "prompt.md doesn't contain query"
+
+        # Check that user_request.md exists and contains the query
+        user_request_file = subdir / "user_request.md"
+        assert user_request_file.exists(), "user_request.md not found"
+        user_request_content = user_request_file.read_text()
+        assert len(user_request_content) > 0, "user_request.md is empty"
+        assert "2+2" in user_request_content, "user_request.md doesn't contain query"
 
         # Check that response.json exists
         response_file = subdir / "response.json"
@@ -121,12 +125,12 @@ def test_temp_workspace_no_overwrite():
             assert (subdir / "prompt.md").exists(), f"{subdir.name}/prompt.md not found"
             assert (subdir / "response.json").exists(), f"{subdir.name}/response.json not found"
 
-        # Verify the prompts are different
-        prompt1 = (subdirs_after_second[0] / "prompt.md").read_text()
-        prompt2 = (subdirs_after_second[1] / "prompt.md").read_text()
-        assert "1+1" in prompt1, "First prompt should contain '1+1'"
-        assert "2+2" in prompt2, "Second prompt should contain '2+2'"
-        assert prompt1 != prompt2, "Prompts should be different"
+        # Verify the user requests are different
+        user_request1 = (subdirs_after_second[0] / "user_request.md").read_text()
+        user_request2 = (subdirs_after_second[1] / "user_request.md").read_text()
+        assert "1+1" in user_request1, "First user request should contain '1+1'"
+        assert "2+2" in user_request2, "Second user request should contain '2+2'"
+        assert user_request1 != user_request2, "User requests should be different"
 
 
 def test_reused_settings_dict_no_overwrite():

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2025-10-23
+
+### Added
+- **Sandbox mode enabled by default**: Claude Code now runs in sandboxed environment by default using Anthropic's `sandbox-runtime` (srt)
+  - OS-level isolation via bubblewrap (Linux) or sandbox-exec (macOS)
+  - Full access to `/tmp` for file operations, debug logs, and output files
+  - Network access restricted to `api.anthropic.com` for Claude API calls
+  - Environment variables: `IS_SANDBOX=1` enables autonomous execution, `CLAUDE_CONFIG_DIR=/tmp/claude_sandbox_config` redirects config/debug files
+  - Requirement: `@anthropic-ai/sandbox-runtime` must be installed via npm (`npm install -g @anthropic-ai/sandbox-runtime`)
+  - Can be disabled with `ClaudeCodeProvider({"use_sandbox_runtime": False})`
+
+### Changed
+- **Stdin-based prompt transmission**: Switched from command-line arguments to stdin for passing prompts to Claude CLI
+  - Fixes critical bug where srt re-splits command-line arguments, breaking multi-word prompts
+  - More reliable for long prompts and special characters
+  - Both sync and async execution updated to use stdin
+- **JSON response parsing**: Enhanced to strip srt diagnostic output ("Running: ...") before parsing
+- **Architecture**: User messages now written to `user_request.md`, system instructions to `prompt.md` (previously combined)
+
+### Fixed
+- **Three instances of formatted_text attribute bug** in model.py where `format_messages_for_claude()` return value was incorrectly accessed as object instead of string
+
 ## [0.7.4] - 2025-10-22
 
 ### Changed

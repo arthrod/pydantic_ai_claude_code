@@ -467,21 +467,17 @@ CHOICE: none
         working_dir = settings.get("__working_directory", "/tmp")
 
         # Format user messages and get tool result files
-        format_result = format_messages_for_claude(
+        formatted_messages = format_messages_for_claude(
             messages, skip_system_prompt=has_tool_results, working_dir=working_dir
         )
-        logger.debug("Formatted user messages length: %d chars", len(format_result.formatted_text))
-        logger.debug("Tool result files: %s", format_result.tool_result_files)
+        logger.debug("Formatted user messages length: %d chars", len(formatted_messages))
 
         # Write user messages to separate file for maximum separation
         user_request_path = Path(working_dir) / "user_request.md"
         user_request_path.parent.mkdir(parents=True, exist_ok=True)
         with open(user_request_path, "w", encoding="utf-8") as f:
-            f.write(format_result.formatted_text)
+            f.write(formatted_messages)
         logger.debug("Wrote user messages to: %s", user_request_path)
-
-        # Store tool result files list for later use in synthesis instruction
-        settings["__tool_result_files"] = format_result.tool_result_files
 
         # Build prompt with system instructions only (references user_request.md)
         prompt = ""
@@ -721,13 +717,13 @@ PREVIOUS ATTEMPT HAD ERRORS:
 Please fix the issues above and try again. Follow the directory structure instructions carefully."""
 
         # Write user messages to user_request.md
-        format_result = format_messages_for_claude(
+        formatted_messages = format_messages_for_claude(
             messages, skip_system_prompt=True, working_dir=working_dir
         )
         user_request_path = Path(working_dir) / "user_request.md"
         user_request_path.parent.mkdir(parents=True, exist_ok=True)
         with open(user_request_path, "w", encoding="utf-8") as f:
-            f.write(format_result.formatted_text)
+            f.write(formatted_messages)
         logger.debug("Wrote user messages for retry to: %s", user_request_path)
 
         return f"{instruction}\n\n{retry_instruction}"
@@ -842,13 +838,13 @@ Please fix the issues above and try again. Follow the directory structure instru
         )
 
         # Format messages and write to user_request.md
-        format_result = format_messages_for_claude(
+        formatted_messages = format_messages_for_claude(
             messages, skip_system_prompt=True, working_dir=working_dir
         )
         user_request_path = Path(working_dir) / "user_request.md"
         user_request_path.parent.mkdir(parents=True, exist_ok=True)
         with open(user_request_path, "w", encoding="utf-8") as f:
-            f.write(format_result.formatted_text)
+            f.write(formatted_messages)
         logger.debug("Wrote user messages to: %s", user_request_path)
 
         # Build prompt with just the instruction (references user_request.md)

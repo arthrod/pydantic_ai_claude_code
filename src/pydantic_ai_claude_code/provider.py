@@ -39,6 +39,8 @@ class ClaudeCodeProvider:
                 - timeout_seconds: Subprocess timeout in seconds (default: 900)
                 - claude_cli_path: Path to claude CLI binary (auto-resolved if not provided)
                 - extra_cli_args: Additional CLI arguments to pass through (e.g., ["--debug", "--mcp-config", "config.json"])
+                - use_sandbox_runtime: Enable sandbox-runtime wrapping with IS_SANDBOX=1 (default: True)
+                - sandbox_runtime_path: Path to srt binary (auto-resolved if not provided)
         """
         config = settings or {}
 
@@ -56,13 +58,15 @@ class ClaudeCodeProvider:
         self.timeout_seconds = config.get("timeout_seconds", 900)
         self.claude_cli_path = config.get("claude_cli_path")
         self.extra_cli_args = config.get("extra_cli_args")
+        self.use_sandbox_runtime = config.get("use_sandbox_runtime", True)
+        self.sandbox_runtime_path = config.get("sandbox_runtime_path")
         self._temp_dir: Path | None = None
 
         logger.debug(
             "Initialized ClaudeCodeProvider with model=%s, "
             "working_directory=%s, use_temp_workspace=%s, "
             "dangerously_skip_permissions=%s, retry_on_rate_limit=%s, timeout_seconds=%s, "
-            "claude_cli_path=%s",
+            "claude_cli_path=%s, use_sandbox_runtime=%s",
             self.model,
             self.working_directory,
             self.use_temp_workspace,
@@ -70,6 +74,7 @@ class ClaudeCodeProvider:
             self.retry_on_rate_limit,
             self.timeout_seconds,
             self.claude_cli_path,
+            self.use_sandbox_runtime,
         )
 
     def __enter__(self) -> Self:
@@ -129,6 +134,8 @@ class ClaudeCodeProvider:
             "timeout_seconds": self.timeout_seconds,
             "claude_cli_path": self.claude_cli_path,
             "extra_cli_args": self.extra_cli_args,
+            "use_sandbox_runtime": self.use_sandbox_runtime,
+            "sandbox_runtime_path": self.sandbox_runtime_path,
         }
 
         # Apply overrides

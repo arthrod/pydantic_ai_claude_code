@@ -153,6 +153,10 @@ class ClaudeCodeSettings(TypedDict, total=False):
     extra_cli_args: list[str] | None  # Additional CLI arguments to pass through to claude CLI
     debug_save_prompts: str | bool  # Save prompts and responses to directory (True = /tmp/claude_debug, or specify path)
     additional_files: dict[str, Path]  # Additional files to copy into working directory (destination filename -> source Path)
+
+    # Sandbox settings (requires @anthropic-ai/sandbox-runtime installed)
+    use_sandbox_runtime: bool  # Enable sandbox-runtime wrapping with IS_SANDBOX=1 (default: True)
+    sandbox_runtime_path: str | None  # Path to srt binary (defaults to auto-resolved from PATH)
     __structured_output_file: str  # Internal: temp file path for structured output
     __unstructured_output_file: str  # Internal: temp file path for unstructured output
     __function_call_file: str  # Internal: temp file path for function call JSON

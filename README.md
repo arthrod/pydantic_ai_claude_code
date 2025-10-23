@@ -1,4 +1,4 @@
-# Pydantic AI Claude Code
+t# Pydantic AI Claude Code
 
 Use your local Claude Code CLI as a Pydantic AI model provider.
 
@@ -26,7 +26,45 @@ uv add pydantic-ai-claude-code
 pip install pydantic-ai-claude-code
 ```
 
-**Prerequisites**: You must have [Claude Code CLI](https://claude.com/claude-code) installed and authenticated on your system.
+**Prerequisites**:
+- [Claude Code CLI](https://claude.com/claude-code) must be installed and authenticated
+- **Sandbox Runtime** (required): `npm install -g @anthropic-ai/sandbox-runtime`
+
+## Sandbox Mode (Enabled by Default)
+
+**New in v0.8.0**: All Claude Code execution now runs in a secure sandbox by default using Anthropic's [`sandbox-runtime`](https://github.com/anthropic-experimental/sandbox-runtime).
+
+### What This Means
+
+- **OS-Level Isolation**: Uses bubblewrap (Linux) or sandbox-exec (macOS) for kernel-level security
+- **Filesystem Access**: Full read/write access to `/tmp` only - everything else is read-only
+- **Network Access**: Restricted to `api.anthropic.com` for Claude API calls
+- **Autonomous Execution**: `IS_SANDBOX=1` environment variable enables Claude to run without permission prompts
+- **Zero Configuration**: Works automatically after installing `sandbox-runtime`
+
+### Installation
+
+```bash
+# Install sandbox-runtime globally via npm
+npm install -g @anthropic-ai/sandbox-runtime
+
+# Verify installation
+srt --version
+```
+
+### Disabling Sandbox (Not Recommended)
+
+If you need to disable sandbox mode for debugging:
+
+```python
+from pydantic_ai_claude_code import ClaudeCodeProvider
+from pydantic_ai import Agent
+
+provider = ClaudeCodeProvider({"use_sandbox_runtime": False})
+agent = Agent('claude-code:sonnet')
+```
+
+⚠️ **Warning**: Disabling sandbox removes security isolation. Only do this in trusted environments.
 
 ## Quick Start
 
@@ -351,6 +389,7 @@ See the `examples/` directory for more demonstrations:
 - `async_example.py` - Async/await usage patterns
 - `advanced_example.py` - Custom provider configurations
 - `tools_and_streaming.py` - Custom tools and streaming responses
+- `sandbox_example.py` - Sandbox-runtime integration for production security
 - `binary_content_example.py` - Standard interface for images, PDFs, and binary files
 - `additional_files_example.py` - Providing local files for analysis (Claude Code-specific)
 

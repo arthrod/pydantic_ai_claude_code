@@ -94,24 +94,26 @@ def strip_markdown_code_fence(text: str) -> str:
 
 
 async def create_subprocess_async(
-    cmd: list[str], cwd: str | None = None
+    cmd: list[str], cwd: str | None = None, env: dict[str, str] | None = None
 ) -> asyncio.subprocess.Process:
     """Create an async subprocess with standard configuration.
 
     Args:
         cmd: Command and arguments to execute
         cwd: Working directory for the process
+        env: Optional environment variables
 
     Returns:
-        Started subprocess with stdout/stderr piped and stdin as DEVNULL
+        Started subprocess with stdout/stderr piped and stdin as PIPE
     """
-    # stdin=DEVNULL because the CLI is non-interactive and should not read from stdin
+    # stdin=PIPE to allow passing prompt via stdin (avoids command-line quoting issues)
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        stdin=asyncio.subprocess.DEVNULL,
+        stdin=asyncio.subprocess.PIPE,  # Changed from DEVNULL to PIPE
         cwd=cwd,
+        env=env,
     )
     return process
 
@@ -179,6 +181,52 @@ def resolve_claude_cli_path(settings: ClaudeCodeSettings | None = None) -> str:
         "2. Set claude_cli_path in ClaudeCodeSettings\n"
         "3. Set CLAUDE_CLI_PATH environment variable\n"
         "4. Add claude binary to your PATH"
+    )
+
+
+def resolve_sandbox_runtime_path(settings: ClaudeCodeSettings | None = None) -> str:
+    """Resolve path to sandbox-runtime (srt) binary.
+
+    Resolution priority:
+    1. sandbox_runtime_path from settings (if provided)
+    2. SANDBOX_RUNTIME_PATH environment variable
+    3. shutil.which('srt') - auto-resolve from PATH
+
+    Args:
+        settings: Optional settings containing sandbox_runtime_path
+
+    Returns:
+        Path to srt binary
+
+    Raises:
+        RuntimeError: If srt binary cannot be found
+    """
+    # Priority 1: Settings
+    if settings and settings.get("sandbox_runtime_path"):
+        srt_path = cast(str, settings["sandbox_runtime_path"])
+        logger.debug("Using sandbox-runtime from settings: %s", srt_path)
+        return srt_path
+
+    # Priority 2: Environment variable
+    env_path = os.environ.get("SANDBOX_RUNTIME_PATH")
+    if env_path:
+        logger.debug("Using sandbox-runtime from SANDBOX_RUNTIME_PATH env var: %s", env_path)
+        return env_path
+
+    # Priority 3: Auto-resolve from PATH
+    which_path = shutil.which("srt")
+    if which_path:
+        logger.debug("Auto-resolved sandbox-runtime from PATH: %s", which_path)
+        return which_path
+
+    # Not found
+    logger.error("Could not find sandbox-runtime (srt) binary")
+    raise RuntimeError(
+        "Could not find sandbox-runtime (srt) binary. Please either:\n"
+        "1. Install sandbox-runtime: npm install -g @anthropic-ai/sandbox-runtime\n"
+        "2. Set sandbox_runtime_path in ClaudeCodeSettings\n"
+        "3. Set SANDBOX_RUNTIME_PATH environment variable\n"
+        "4. Add srt binary to your PATH"
     )
 
 
@@ -404,13 +452,16 @@ def build_claude_command(
 ) -> list[str]:
     """Build Claude CLI command with appropriate flags.
 
+    When use_sandbox_runtime is enabled, wraps the command in sandbox-runtime
+    with IS_SANDBOX=1 environment variable for secure autonomous execution.
+
     Args:
         settings: Optional settings for Claude Code execution
         input_format: Input format ('text' or 'stream-json')
         output_format: Output format ('text', 'json', or 'stream-json')
 
     Returns:
-        List of command arguments
+        List of command arguments (may be wrapped with srt if sandbox enabled)
     """
     settings = settings or {}
     claude_path = resolve_claude_cli_path(settings)
@@ -433,8 +484,77 @@ def build_claude_command(
         cmd.extend(extra_args)
         logger.debug("Added %d extra CLI arguments: %s", len(extra_args), extra_args)
 
-    # Add prompt reference
-    cmd.append("Follow the instructions in prompt.md")
+    # Do NOT add prompt to command line - it will be passed via stdin
+    # This avoids quoting issues when wrapping with sandbox-runtime
+
+    # Wrap with sandbox-runtime if enabled
+    if settings.get("use_sandbox_runtime"):
+        srt_path = resolve_sandbox_runtime_path(settings)
+
+        # Sandbox config: Allow full /tmp access as required by user
+        # "claude code should be able to do any write and read operation in /tmp"
+        # Network allowed for Claude API calls to Anthropic
+        config = {
+            "permissions": {
+                "allow": [
+                    "Bash(*)",                          # Allow bash (OS sandbox blocks dangerous filesystem ops)
+                    "Write(/tmp/**)",                   # Allow writes to /tmp (for outputs, debug logs, etc.)
+                    "Read(/tmp/**)",                    # Allow reads from /tmp
+                    "Edit(/tmp/**)",                    # Allow edits to /tmp files
+                    "WebFetch(domain:api.anthropic.com)",  # Allow API calls to Anthropic (required for Claude to work)
+                ]
+            }
+        }
+
+        # Write config to temp file
+        config_fd, config_path = tempfile.mkstemp(suffix=".json", prefix="srt_config_")
+        try:
+            with os.fdopen(config_fd, 'w') as f:
+                json.dump(config, f)
+
+            # Redirect Claude config/debug to /tmp to avoid ~/.claude/ writes
+            claude_config_dir = "/tmp/claude_sandbox_config"
+            os.makedirs(claude_config_dir, exist_ok=True)
+
+            # Copy OAuth credentials from ~/.claude/ to sandbox config dir
+            # This allows Claude to authenticate while keeping debug logs in /tmp
+            home_claude_dir = Path.home() / ".claude"
+            credentials_file = home_claude_dir / ".credentials.json"
+            settings_file = home_claude_dir / "settings.json"
+
+            if credentials_file.exists():
+                shutil.copy2(credentials_file, Path(claude_config_dir) / ".credentials.json")
+                logger.debug("Copied credentials to sandbox config dir")
+
+            if settings_file.exists():
+                shutil.copy2(settings_file, Path(claude_config_dir) / "settings.json")
+                logger.debug("Copied settings to sandbox config dir")
+
+            # Build wrapper: srt -- <claude command>
+            # Environment variables (IS_SANDBOX=1, CLAUDE_CONFIG_DIR) will be set via subprocess env parameter
+            wrapped_cmd = [
+                srt_path,
+                "--settings", config_path,
+                "--",
+            ] + cmd
+
+            # Store sandbox env vars in settings so subprocess can use them
+            if settings is not None:
+                settings["__sandbox_env"] = {
+                    "IS_SANDBOX": "1",
+                    "CLAUDE_CONFIG_DIR": claude_config_dir,
+                }
+
+            logger.info("Wrapped Claude command with sandbox (IS_SANDBOX=1, CLAUDE_CONFIG_DIR=%s)", claude_config_dir)
+            logger.debug("Full sandboxed command: %s", " ".join(wrapped_cmd))
+            return wrapped_cmd
+        except Exception:
+            # Clean up config file on error
+            try:
+                os.unlink(config_path)
+            except Exception:
+                pass
+            raise
 
     logger.debug("Built Claude command: %s", " ".join(cmd))
     return cmd
@@ -592,16 +712,17 @@ def _setup_working_directory_and_prompt(
     # Save prompt for debugging if enabled
     _save_prompt_debug(prompt, settings)
 
-    # Store working directory and response filename in settings for later
+    # Store working directory, response filename, and prompt text in settings for later
     if settings is not None:
         settings["__working_directory"] = cwd
         settings["__response_file_path"] = str(Path(cwd) / "response.json")
+        settings["__prompt_text"] = prompt  # Store for stdin transmission
 
     return cwd
 
 
 def _execute_sync_command(
-    cmd: list[str], cwd: str, timeout_seconds: int
+    cmd: list[str], cwd: str, timeout_seconds: int, settings: ClaudeCodeSettings | None = None
 ) -> subprocess.CompletedProcess[str]:
     """Execute command synchronously with timeout.
 
@@ -609,6 +730,7 @@ def _execute_sync_command(
         cmd: Command to execute
         cwd: Working directory
         timeout_seconds: Timeout in seconds
+        settings: Optional settings (for sandbox env vars)
 
     Returns:
         Completed process result
@@ -618,8 +740,22 @@ def _execute_sync_command(
     """
     start_time = time.time()
 
+    # Get sandbox environment variables if present
+    env = None
+    if settings and settings.get("__sandbox_env"):
+        env = os.environ.copy()
+        env.update(settings["__sandbox_env"])
+        logger.debug("Using sandbox environment: %s", settings["__sandbox_env"])
+
     try:
         logger.info("Running Claude CLI synchronously in %s", cwd)
+
+        # Get prompt from settings to pass via stdin (avoids quoting issues with srt)
+        prompt_input = None
+        if settings and settings.get("__prompt_text"):
+            prompt_input = settings["__prompt_text"]
+            logger.debug("Passing prompt via stdin (%d chars)", len(prompt_input))
+
         return subprocess.run(
             cmd,
             capture_output=True,
@@ -627,6 +763,8 @@ def _execute_sync_command(
             check=False,
             cwd=cwd,
             timeout=timeout_seconds,
+            env=env,
+            input=prompt_input,
         )
     except subprocess.TimeoutExpired:
         elapsed = time.time() - start_time
@@ -726,6 +864,15 @@ def _parse_json_response(raw_stdout: str) -> ClaudeJSONResponse:
     Raises:
         RuntimeError: If no result event found
     """
+    # Strip srt diagnostic output if present (when using sandbox-runtime)
+    # srt outputs "Running: <command>" on first line before actual JSON
+    if raw_stdout.startswith("Running: "):
+        # Skip first line
+        first_newline = raw_stdout.find('\n')
+        if first_newline > 0:
+            raw_stdout = raw_stdout[first_newline + 1:]
+            logger.debug("Stripped srt diagnostic line from stdout")
+
     raw_response = json.loads(raw_stdout)
 
     if isinstance(raw_response, list):
@@ -858,7 +1005,7 @@ def _try_sync_execution_with_rate_limit_retry(
     """
     while True:
         start_time = time.time()
-        result = _execute_sync_command(cmd, cwd, timeout_seconds)
+        result = _execute_sync_command(cmd, cwd, timeout_seconds, settings)
         elapsed = time.time() - start_time
 
         # Check for errors if command failed
@@ -965,7 +1112,7 @@ def run_claude_sync(
 
 
 async def _execute_async_command(
-    cmd: list[str], cwd: str, timeout_seconds: int
+    cmd: list[str], cwd: str, timeout_seconds: int, settings: ClaudeCodeSettings | None = None
 ) -> tuple[bytes, bytes, int]:
     """Execute command asynchronously with timeout.
 
@@ -973,6 +1120,7 @@ async def _execute_async_command(
         cmd: Command to execute
         cwd: Working directory
         timeout_seconds: Timeout in seconds
+        settings: Optional settings (for sandbox env vars)
 
     Returns:
         Tuple of (stdout, stderr, returncode)
@@ -983,11 +1131,24 @@ async def _execute_async_command(
     start_time = time.time()
     logger.info("Running Claude CLI asynchronously in %s", cwd)
 
-    process = await create_subprocess_async(cmd, cwd)
+    # Get sandbox environment variables if present
+    env = None
+    if settings and settings.get("__sandbox_env"):
+        env = os.environ.copy()
+        env.update(settings["__sandbox_env"])
+        logger.debug("Using sandbox environment: %s", settings["__sandbox_env"])
+
+    process = await create_subprocess_async(cmd, cwd, env)
 
     try:
+        # Get prompt from settings to pass via stdin (avoids quoting issues with srt)
+        prompt_input = None
+        if settings and settings.get("__prompt_text"):
+            prompt_input = settings["__prompt_text"].encode('utf-8')
+            logger.debug("Passing prompt via stdin (%d chars)", len(settings["__prompt_text"]))
+
         stdout, stderr = await asyncio.wait_for(
-            process.communicate(),
+            process.communicate(input=prompt_input),
             timeout=timeout_seconds,
         )
         return stdout, stderr, process.returncode or 0
@@ -1029,7 +1190,7 @@ async def _try_async_execution_with_rate_limit_retry(
     """
     while True:
         start_time = time.time()
-        process_output = await _execute_async_command(cmd, cwd, timeout_seconds)
+        process_output = await _execute_async_command(cmd, cwd, timeout_seconds, settings)
         elapsed = time.time() - start_time
         stdout, stderr, returncode = process_output
 

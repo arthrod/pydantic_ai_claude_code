@@ -287,6 +287,16 @@ uv run python examples/long_response_example.py
 - **Natural workflow**: Claude builds content piece-by-piece naturally
 - **Reliable**: Robust file operations vs. fragile JSON generation
 
+**Sandbox Runtime Strategy**: Optionally wraps Claude CLI in Anthropic's sandbox-runtime for OS-level isolation (disabled by default):
+- **When enabled** (`use_sandbox_runtime=True`): Wraps command with `srt -- env IS_SANDBOX=1 <claude command>`
+- **IS_SANDBOX=1**: Environment variable tells Claude CLI it's running in a sandbox, allowing `--dangerously-skip-permissions` as root
+- **OS-level isolation**: sandbox-runtime enforces filesystem and network restrictions at the kernel level
+- **Fully autonomous**: No permission prompts - Claude runs freely within sandbox boundaries
+- **Binary resolution**: Auto-resolves `srt` from PATH, or customizable via `sandbox_runtime_path` setting or `SANDBOX_RUNTIME_PATH` env var
+- **Requirements**: Requires `@anthropic-ai/sandbox-runtime` installed (`npm install -g @anthropic-ai/sandbox-runtime`)
+- **Use cases**: Production deployments, untrusted code execution, multi-tenant systems, security-critical environments
+- **Inside the sandbox**: Everything is allowed - no fine-grained permission configuration needed
+
 ## Important Implementation Notes
 
 - **Auto-registration**: The package registers itself on import, so users don't need to explicitly configure the provider

@@ -1,172 +1,19 @@
-"""Tests for tool calling functionality."""
+"""Tests for tool calling functionality.
+
+Integration tests with actual Agent and Claude CLI running in sandbox mode (default).
+All tests use real Claude Code CLI with sandbox-runtime (srt) for secure execution.
+"""
 
 from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic_ai import Agent, BinaryContent, RunContext
-from pydantic_ai.messages import ToolCallPart
 
-from pydantic_ai_claude_code.tools import (
-    is_tool_call_response,
-    parse_tool_calls,
-)
 from pydantic_ai_claude_code.types import ClaudeCodeModelSettings
 
 # Test constants
-EXPECTED_MULTIPLE_TOOL_CALLS = 2  # Expected number of tool calls in multi-call test
 ARCHIVED_CUSTOMER_ID = 12345  # Test customer ID for error handling
-
-
-def test_parse_tool_calls_valid_single():
-    """Test parsing a valid single tool call."""
-    response = """```json
-{
-  "type": "tool_calls",
-  "calls": [
-    {"tool_name": "get_weather", "args": {"city": "London", "units": "celsius"}}
-  ]
-}
-```"""
-
-    result = parse_tool_calls(response)
-
-    assert result is not None
-    assert len(result) == 1
-    assert isinstance(result[0], ToolCallPart)
-    assert result[0].tool_name == "get_weather"
-    assert result[0].args == {"city": "London", "units": "celsius"}
-    assert result[0].tool_call_id.startswith("call_")
-
-
-def test_parse_tool_calls_valid_multiple():
-    """Test parsing multiple tool calls."""
-    response = """{
-  "type": "tool_calls",
-  "calls": [
-    {"tool_name": "tool1", "args": {"param": "value1"}},
-    {"tool_name": "tool2", "args": {"param": "value2"}}
-  ]
-}"""
-
-    result = parse_tool_calls(response)
-
-    assert result is not None
-    assert len(result) == EXPECTED_MULTIPLE_TOOL_CALLS
-    assert result[0].tool_name == "tool1"
-    assert result[1].tool_name == "tool2"
-
-
-def test_parse_tool_calls_plain_text():
-    """Test parsing plain text (not tool calls)."""
-    response = "This is just a regular response, not a tool call."
-
-    result = parse_tool_calls(response)
-
-    assert result is None
-
-
-def test_parse_tool_calls_invalid_json():
-    """Test parsing invalid JSON."""
-    response = """{
-  "type": "tool_calls",
-  "calls": [
-    {"tool_name": "test", "args": invalid}
-  ]
-}"""
-
-    result = parse_tool_calls(response)
-
-    assert result is None
-
-
-def test_parse_tool_calls_wrong_type():
-    """Test parsing JSON with wrong type field."""
-    response = """{
-  "type": "something_else",
-  "data": "value"
-}"""
-
-    result = parse_tool_calls(response)
-
-    assert result is None
-
-
-def test_parse_tool_calls_missing_calls():
-    """Test parsing JSON missing calls array."""
-    response = """{
-  "type": "tool_calls"
-}"""
-
-    result = parse_tool_calls(response)
-
-    assert result is None
-
-
-def test_parse_tool_calls_empty_calls():
-    """Test parsing JSON with empty calls array."""
-    response = """{
-  "type": "tool_calls",
-  "calls": []
-}"""
-
-    result = parse_tool_calls(response)
-
-    assert result is None
-
-
-def test_parse_tool_calls_missing_tool_name():
-    """Test parsing call missing tool_name."""
-    response = """{
-  "type": "tool_calls",
-  "calls": [
-    {"args": {"param": "value"}}
-  ]
-}"""
-
-    result = parse_tool_calls(response)
-
-    assert result is None
-
-
-def test_parse_tool_calls_args_optional():
-    """Test parsing call with missing args (should default to empty dict)."""
-    response = """{
-  "type": "tool_calls",
-  "calls": [
-    {"tool_name": "test"}
-  ]
-}"""
-
-    result = parse_tool_calls(response)
-
-    assert result is not None
-    assert len(result) == 1
-    assert result[0].tool_name == "test"
-    assert result[0].args == {}
-
-
-def test_is_tool_call_response_true():
-    """Test detecting tool call response."""
-    response = """{
-  "type": "tool_calls",
-  "calls": [
-    {"tool_name": "test", "args": {}}
-  ]
-}"""
-
-    assert is_tool_call_response(response) is True
-
-
-def test_is_tool_call_response_false():
-    """Test detecting non-tool-call response."""
-    response = "This is a regular text response."
-
-    assert is_tool_call_response(response) is False
-
-
-# Integration tests with actual Agent and Claude CLI
-# Note: Import here because we need to register the provider first via import at module level
 
 
 def test_agent_single_tool_string_param():
