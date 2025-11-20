@@ -545,6 +545,22 @@ wheels = [
 ]
 
 [[package]]
+name = "claude-agent-sdk"
+version = "0.1.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "mcp" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6e/2c/14828b10a5c99a3cdc42b12451c9ed03de6d53a712da4fe7b0b41c28e693/claude_agent_sdk-0.1.8.tar.gz", hash = "sha256:8ee495215132edc7f88e439f3f071154a016cea62d393fbf985eb806793ed3d1", size = 50899, upload-time = "2025-11-19T05:07:58.064Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2a/4e/fe4da2c056caaa4eb819181e77f2497f39ab2fb629ae93f0bed62a521982/claude_agent_sdk-0.1.8-py3-none-macosx_11_0_arm64.whl", hash = "sha256:bdec17988dba541bd48487d68d8e2dbcbe5fef718744f3c73b4236bb3e290875", size = 49380557, upload-time = "2025-11-19T05:07:48.607Z" },
+    { url = "https://files.pythonhosted.org/packages/95/7d/b1f6648d6631c892205c3db44f862532471aa2dead846c9d78c260ba3a73/claude_agent_sdk-0.1.8-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:6640f4c977842dc73a277a7f934a889c0161ab78ad454806cfb2b34eb0a2a7f7", size = 65237961, upload-time = "2025-11-19T05:07:52.021Z" },
+    { url = "https://files.pythonhosted.org/packages/b9/fd/cba2bad3c79519be68c266b95a55508f856f7c3b3eaa47cfa9051672a221/claude_agent_sdk-0.1.8-py3-none-win_amd64.whl", hash = "sha256:4b2db1276d553b5cfa939701d0f6b9da38797db93445b9579f97498d0b4f3724", size = 68148406, upload-time = "2025-11-19T05:07:55.279Z" },
+]
+
+[[package]]
 name = "click"
 version = "8.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1941,10 +1957,12 @@ wheels = [
 
 [[package]]
 name = "pydantic-ai-claude-code"
-version = "0.8.0"
+version = "0.8.1"
 source = { editable = "." }
 dependencies = [
+    { name = "anyio" },
     { name = "beautifulsoup4" },
+    { name = "claude-agent-sdk" },
     { name = "pydantic" },
     { name = "pydantic-ai" },
     { name = "pydantic-ai-slim", extra = ["duckduckgo"] },
@@ -1963,7 +1981,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=3.0.0" },
     { name = "beautifulsoup4", specifier = ">=4.14.2" },
+    { name = "claude-agent-sdk", specifier = ">=0.1.8" },
     { name = "pydantic", specifier = ">=2.11.9" },
     { name = "pydantic-ai", specifier = ">=1.0.15" },
     { name = "pydantic-ai-slim", extras = ["duckduckgo"], specifier = ">=1.0.15" },
