@@ -210,3 +210,49 @@ class ClaudeCodeProvider:
             logger.debug("Generated settings with overrides: %s", overrides)
 
         return cast(ClaudeCodeSettings, final_settings)
+
+    def to_sdk_options(self, **overrides: Any) -> "ClaudeAgentOptions":
+        """Convert provider settings to SDK options format.
+
+        Args:
+            **overrides: Override specific settings
+
+        Returns:
+            SDK agent options dictionary
+        """
+        from .sdk_original_files.types import ClaudeAgentOptions
+
+        settings = self.get_settings(**overrides)
+
+        options: ClaudeAgentOptions = ClaudeAgentOptions(
+            model=settings.get("model", "sonnet"),
+            cwd=settings.get("working_directory"),
+            allowed_tools=settings.get("allowed_tools", []),
+            disallowed_tools=settings.get("disallowed_tools", []),
+            permission_mode=settings.get("permission_mode", "bypassPermissions"),
+            cli_path=settings.get("claude_cli_path"),
+            timeout_ms=settings.get("timeout_seconds", 900) * 1000,
+            verbose=settings.get("verbose", False),
+            append_system_prompt=settings.get("append_system_prompt"),
+        )
+
+        # Build extra args from extra_cli_args
+        extra_args = settings.get("extra_cli_args", [])
+        if extra_args:
+            options["extra_args"] = {}
+            i = 0
+            while i < len(extra_args):
+                arg = extra_args[i]
+                if arg.startswith("--"):
+                    key = arg[2:]
+                    # Check if next arg is a value
+                    if i + 1 < len(extra_args) and not extra_args[i + 1].startswith("--"):
+                        options["extra_args"][key] = extra_args[i + 1]
+                        i += 2
+                    else:
+                        options["extra_args"][key] = None
+                        i += 1
+                else:
+                    i += 1
+
+        return options
