@@ -34,7 +34,17 @@ def register_claude_code_model() -> None:
         _original_infer_model = models.infer_model
 
         def _patched_infer_model(model: "Model | str") -> "Model":
-            """Patched version of infer_model that supports claude-code provider."""
+            """
+            Enable recognition of 'claude-code' provider strings when inferring a model.
+            
+            Recognizes these string formats and produces the corresponding ClaudeCodeModel:
+            - "claude-code:<model_name>" → returns ClaudeCodeModel constructed with <model_name>.
+            - "claude-code:<preset_id>:<model_alias>" → constructs a ClaudeCodeProvider using <preset_id>, resolves the actual model name from <model_alias>, and returns ClaudeCodeModel(actual_model, provider=provider).
+            
+            @param model: A Model instance or a provider string. If a Model is passed, it is returned unchanged. If a string matches the supported 'claude-code' formats, a ClaudeCodeModel is created as described above; otherwise inference is delegated to the original framework resolver.
+            
+            @returns: A resolved Model instance: the original Model if passed, a ClaudeCodeModel for supported 'claude-code' strings, or whatever the original infer_model would return for other inputs.
+            """
             # If it's already a Model instance, just return it
             if isinstance(model, models.Model):
                 return model
