@@ -17,13 +17,16 @@ _debug_counter = 0
 
 
 def get_debug_dir(settings: dict[str, Any] | None) -> Path | None:
-    """Get debug directory path if debug saving is enabled.
-
-    Args:
-        settings: Settings dict
-
+    """
+    Determine the directory path used for saving debug prompts when enabled.
+    
+    If the provided settings contain a truthy "debug_save_prompts" value this returns the corresponding Path and ensures the directory exists. If "debug_save_prompts" is True the path "/tmp/claude_debug" is used; if it is a string that string is used as the directory path. If settings is None or "debug_save_prompts" is missing or falsy, saving is considered disabled.
+    
+    Parameters:
+        settings (dict[str, Any] | None): Settings mapping that may contain the "debug_save_prompts" key.
+    
     Returns:
-        Path to debug directory or None if disabled
+        Path | None: Path to the debug directory when saving is enabled, or `None` when disabled.
     """
     if not settings:
         return None
@@ -42,11 +45,14 @@ def get_debug_dir(settings: dict[str, Any] | None) -> Path | None:
 
 
 def save_prompt_debug(prompt: str, settings: dict[str, Any] | None) -> None:
-    """Save prompt to debug file if enabled.
-
-    Args:
-        prompt: Prompt text to save
-        settings: Settings dict
+    """
+    Save the given prompt to a timestamped debug file when debug saving is enabled.
+    
+    Parameters:
+        prompt: The prompt text to persist.
+        settings: Configuration mapping that enables or configures debug saving. If the key
+            "debug_save_prompts" is truthy, prompts are saved; if its value is a string it is
+            treated as the directory path to save files, otherwise a default debug directory is used.
     """
     debug_dir = get_debug_dir(settings)
     if not debug_dir:
@@ -64,11 +70,14 @@ def save_prompt_debug(prompt: str, settings: dict[str, Any] | None) -> None:
 
 
 def save_response_debug(response: dict[str, Any], settings: dict[str, Any] | None) -> None:
-    """Save response to debug file if enabled.
-
-    Args:
-        response: Claude response to save
-        settings: Settings dict
+    """
+    Save a Claude response dictionary to a timestamped JSON file when debug saving is enabled.
+    
+    If debug saving is disabled (get_debug_dir returns None) this function does nothing. When enabled, the response is serialized as pretty-printed JSON and written into the debug directory using the filename pattern "<counter>_<YYYYMMDD_HHMMSS>_response.json" where <counter> is the current three-digit debug counter.
+    
+    Parameters:
+        response (dict[str, Any]): Claude response object to persist.
+        settings (dict[str, Any] | None): Optional settings used to determine the debug directory; if None or debug saving is disabled, no file is written.
     """
     debug_dir = get_debug_dir(settings)
     if not debug_dir:
@@ -87,11 +96,15 @@ def save_response_debug(response: dict[str, Any], settings: dict[str, Any] | Non
 def save_raw_response_to_working_dir(
     response: dict[str, Any], settings: dict[str, Any] | None
 ) -> None:
-    """Save raw response to working directory (always-on feature).
-
-    Args:
-        response: Claude response to save
-        settings: Settings dict containing __response_file_path
+    """
+    Persist the raw Claude response to a file path taken from settings.
+    
+    If settings is None or does not contain the "__response_file_path" key, the function returns without action. When a path is provided, the function serializes `response` as JSON (indent=2) and writes it to that path; success and failure are logged.
+    
+    Parameters:
+        response (dict[str, Any]): The raw response object to serialize and save.
+        settings (dict[str, Any] | None): Configuration dictionary that must include the "__response_file_path"
+            key with the filesystem path (string) where the response should be written.
     """
     if not settings:
         return

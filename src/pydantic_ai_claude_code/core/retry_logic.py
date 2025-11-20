@@ -12,13 +12,14 @@ logger = logging.getLogger(__name__)
 
 
 def detect_rate_limit(error_output: str) -> tuple[bool, str | None]:
-    """Detect rate limit error and extract reset time.
-
-    Args:
-        error_output: Combined stdout + stderr from Claude CLI
-
+    """
+    Detects a rate-limit condition in combined Claude CLI output and extracts the reported reset time.
+    
+    Parameters:
+        error_output (str): Combined stdout and stderr text from the Claude CLI.
+    
     Returns:
-        Tuple of (is_rate_limited, reset_time_str)
+        tuple[bool, str | None]: (True, reset_time_str) when a reset time like '3PM' is found; (False, None) otherwise.
     """
     # Pattern matches: "limit reached.*resets 3PM" or similar
     rate_limit_match = re.search(
@@ -34,13 +35,14 @@ def detect_rate_limit(error_output: str) -> tuple[bool, str | None]:
 
 
 def calculate_wait_time(reset_time_str: str) -> int:
-    """Calculate seconds to wait until reset time.
-
-    Args:
-        reset_time_str: Time string like "3PM" or "11AM"
-
+    """
+    Compute how many seconds to wait until the provided 12-hour reset time, including a 1-minute buffer.
+    
+    Parameters:
+        reset_time_str (str): Reset time in 12-hour format with AM/PM (examples: "3PM", "11AM").
+    
     Returns:
-        Seconds to wait (with 1-minute buffer)
+        int: Number of seconds to wait until the reset time plus a 1-minute buffer. If the parsed reset time is earlier than now, the function treats it as occurring the next day. If parsing fails, returns 300 (5 minutes) as a fallback.
     """
     try:
         now = datetime.now()
@@ -81,13 +83,14 @@ def calculate_wait_time(reset_time_str: str) -> int:
 
 
 def detect_cli_infrastructure_failure(stderr: str) -> bool:
-    """Detect transient Claude CLI infrastructure failures that should trigger retry.
-
-    Args:
-        stderr: Error output from Claude CLI
-
+    """
+    Detects whether Claude CLI stderr contains a retryable infrastructure failure.
+    
+    Parameters:
+        stderr (str): Error output from the Claude CLI.
+    
     Returns:
-        True if error indicates retryable infrastructure failure
+        True if the stderr indicates a retryable infrastructure failure (e.g., missing or unresolved Node modules, filesystem access errors), False otherwise.
     """
     # Node.js module loading errors (e.g., missing yoga.wasm)
     if "Cannot find module" in stderr:

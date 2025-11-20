@@ -32,14 +32,16 @@ def get_next_call_subdirectory(base_dir: str) -> Path:
 
 
 def copy_additional_files(cwd: str, additional_files: dict[str, Path]) -> None:
-    """Copy additional files into working directory.
-
-    Args:
-        cwd: Working directory path
-        additional_files: Dict mapping destination filename to source Path
-
+    """
+    Copy files from the provided source Paths into the working directory under the specified destination names.
+    
+    Parameters:
+        cwd (str): Destination working directory; destination paths are created relative to this directory.
+        additional_files (dict[str, Path]): Mapping from destination filename (may include subdirectories) to the source Path to copy.
+    
     Raises:
-        FileNotFoundError: If source file doesn't exist
+        FileNotFoundError: If a source path does not exist.
+        ValueError: If a source path exists but is not a file.
     """
     for dest_name, source_path in additional_files.items():
         # Resolve relative paths from current working directory

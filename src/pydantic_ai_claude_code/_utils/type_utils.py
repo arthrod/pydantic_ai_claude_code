@@ -12,27 +12,16 @@ logger = logging.getLogger(__name__)
 def convert_primitive_value(
     value: str, field_type: str
 ) -> int | float | bool | str | None:
-    """Convert string value to typed primitive.
-
-    Centralized type conversion used throughout the codebase for consistent
-    handling of JSON schema type conversion.
-
-    Args:
-        value: String value to convert
-        field_type: Target type (integer, number, boolean, string)
-
+    """
+    Convert a string value to the target JSON Schema primitive.
+    
+    Parameters:
+        value (str): The string to convert.
+        field_type (str): Target JSON Schema type; supported values are "integer", "number", "boolean", and "string".
+    
     Returns:
-        Converted value or None if conversion fails
-
-    Examples:
-        >>> convert_primitive_value("42", "integer")
-        42
-        >>> convert_primitive_value("3.14", "number")
-        3.14
-        >>> convert_primitive_value("true", "boolean")
-        True
-        >>> convert_primitive_value("hello", "string")
-        'hello'
+        int, float, bool, or str: The converted value corresponding to the requested type.
+        None: If conversion fails or the field_type is unsupported.
     """
     try:
         if field_type == "integer":
@@ -53,13 +42,14 @@ def convert_primitive_value(
 
 
 def get_type_description(field_type: str) -> str:
-    """Get human-readable type description.
-
-    Args:
-        field_type: JSON schema type string
-
+    """
+    Provide a human-readable description for a JSON Schema primitive type.
+    
+    Parameters:
+        field_type (str): JSON Schema type name such as "string", "integer", "number", or "boolean".
+    
     Returns:
-        Human-readable description
+        description (str): A short human-readable description for the given type; returns "Value" for unknown types.
     """
     type_map = {
         "string": "Text value",

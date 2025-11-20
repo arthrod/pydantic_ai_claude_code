@@ -38,19 +38,17 @@ def strip_markdown_code_fence(text: str) -> str:
 
 
 def extract_json_from_text(text: str, schema: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """Extract JSON from text using multiple strategies.
-
-    Tries various methods to extract valid JSON from Claude's response:
-    1. Direct parsing of stripped markdown
-    2. Search for JSON object pattern
-    3. Single-field wrapping for simple responses
-
-    Args:
-        text: Text containing JSON
-        schema: Optional schema to guide extraction
-
+    """
+    Extract a JSON object from a text string using fallback strategies.
+    
+    Attempts direct parsing after removing Markdown code fences. If parsing fails, attempts to locate a JSON object between the first '{' and the last '}' in the input. If those attempts fail and a schema with exactly one property is provided, returns a dict mapping that single property name to the cleaned text.
+    
+    Parameters:
+        text (str): Input text that may contain a JSON object.
+        schema (dict[str, Any] | None): Optional JSON Schema; if it defines exactly one property, that property's name will be used as the key when wrapping a simple response.
+    
     Returns:
-        Parsed JSON dict or None if extraction fails
+        dict[str, Any] | None: Parsed JSON dictionary on success, `None` if extraction fails.
     """
     # Strategy 1: Direct parse after stripping markdown
     cleaned = strip_markdown_code_fence(text)
