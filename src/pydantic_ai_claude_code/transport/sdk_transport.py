@@ -42,13 +42,14 @@ RETRY_BACKOFF_BASE = 2  # Exponential backoff base (seconds)
 
 
 def convert_settings_to_sdk_options(settings: ClaudeCodeSettings) -> dict[str, Any]:
-    """Convert our ClaudeCodeSettings to Claude Agent SDK options format.
-
-    Args:
-        settings: Our settings dict
-
+    """
+    Translate internal ClaudeCodeSettings into a dict of Claude Agent SDK options.
+    
+    Parameters:
+        settings (ClaudeCodeSettings): Source settings mapping; may include keys like "working_directory", "append_system_prompt", "allowed_tools", "dangerously_skip_permissions", and "claude_cli_path".
+    
     Returns:
-        Dict compatible with ClaudeAgentOptions
+        dict[str, Any]: SDK-compatible options with keys such as "cwd", "system_prompt", "allowed_tools", "permission_mode", and "cli_path" populated when present.
     """
     sdk_options: dict[str, Any] = {}
 
@@ -87,11 +88,17 @@ class EnhancedCLITransport:
         prompt: str,
         settings: ClaudeCodeSettings | None = None,
     ):
-        """Initialize the enhanced transport.
-
-        Args:
-            prompt: The prompt to send to Claude
-            settings: Optional settings for configuration
+        """
+        Create an EnhancedCLITransport configured with the given prompt and optional settings.
+        
+        Parameters:
+            prompt (str): The prompt text to send to Claude.
+            settings (ClaudeCodeSettings | None): Optional configuration for the transport; defaults to an empty mapping when not provided.
+        
+        Notes:
+            Initializes internal state:
+              - self._working_directory is set to None.
+              - self._sandbox_env is initialized as an empty dict.
         """
         self.prompt = prompt
         self.settings = settings or {}
@@ -99,14 +106,15 @@ class EnhancedCLITransport:
         self._sandbox_env: dict[str, str] = {}
 
     async def execute(self) -> ClaudeJSONResponse:
-        """Execute the CLI command with all our enhancements.
-
+        """
+        Run the enhanced Claude CLI end-to-end, handling working directory setup, sandboxing, rate-limit retries, infrastructure backoff, and debug saving.
+        
         Returns:
-            Claude JSON response
-
+            ClaudeJSONResponse: Parsed Claude JSON response.
+        
         Raises:
-            ClaudeOAuthError: If OAuth token is expired
-            RuntimeError: For other CLI failures
+            ClaudeOAuthError: If OAuth reauthentication is required.
+            RuntimeError: If the CLI fails after the maximum retry attempts or encounters an unrecoverable error.
         """
         retry_enabled = self.settings.get("retry_on_rate_limit", True)
         timeout_seconds = self.settings.get("timeout_seconds", 900)
@@ -162,10 +170,13 @@ class EnhancedCLITransport:
         raise RuntimeError("Claude CLI failed after maximum retry attempts")
 
     def _setup_working_directory(self) -> str:
-        """Setup working directory and write prompt file.
-
+        """
+        Prepare a filesystem working directory for the current prompt and write the prompt file.
+        
+        Creates or reuses a base directory (a temporary base is created if none is configured), makes a numbered subdirectory for this call, copies any configured additional files into the directory, writes the prompt to `prompt.md`, saves prompt debug information, and records working paths in settings.
+        
         Returns:
-            Working directory path
+            str: Path to the created or reused working directory.
         """
         # Check if already determined
         existing = self.settings.get("__working_directory")
@@ -211,10 +222,11 @@ class EnhancedCLITransport:
         return cwd
 
     def _build_command(self) -> list[str]:
-        """Build the Claude CLI command.
-
+        """
+        Constructs the Claude CLI command from the transport's settings and applies sandbox wrapping if enabled.
+        
         Returns:
-            Command list
+            cmd (list[str]): Command argument list for invoking the Claude CLI. If sandbox runtime is enabled, this method updates self._sandbox_env and settings["__sandbox_env"] as a side effect.
         """
         from ..utils_legacy import resolve_claude_cli_path
 
@@ -273,10 +285,17 @@ class EnhancedCLITransport:
         timeout_seconds: int,
         retry_enabled: bool,
     ) -> tuple[ClaudeJSONResponse | None, bool]:
-        """Try execution with rate limit retry.
-
+        """
+        Attempt the CLI command and handle retryable conditions such as rate limits and infrastructure failures.
+        
+        Parameters:
+            cmd: The CLI command and arguments to run.
+            cwd: Working directory for the command.
+            timeout_seconds: Maximum time to wait for the command to complete.
+            retry_enabled: If True, rate-limit errors will be retried after the recommended wait; if False, rate-limit errors are treated as failures.
+        
         Returns:
-            Tuple of (response or None, should_retry_infra)
+            (response, should_retry_infra) — `response` is the parsed Claude JSON response when execution succeeds, or `None` when an infrastructure retry is recommended; `should_retry_infra` is `True` when an infrastructure retry is suggested, `False` otherwise.
         """
         while True:
             start_time = time.time()
@@ -311,10 +330,16 @@ class EnhancedCLITransport:
         cwd: str,
         timeout_seconds: int,
     ) -> tuple[bytes, bytes, int]:
-        """Execute CLI command asynchronously.
-
+        """
+        Run the given CLI command in a subprocess, supplying prompt text and sandboxed environment when configured.
+        
+        If settings contain "__prompt_text", that text is sent to the process's stdin. If settings contain "__sandbox_env", those values are merged into the process environment. Waits up to timeout_seconds for completion.
+        
         Returns:
-            Tuple of (stdout, stderr, returncode)
+            tuple[bytes, bytes, int]: (stdout bytes, stderr bytes, process return code)
+        
+        Raises:
+            RuntimeError: If the subprocess does not complete within timeout_seconds.
         """
         # Build environment
         env = None
@@ -364,14 +389,26 @@ class EnhancedCLITransport:
         retry_enabled: bool,
         cwd: str,
     ) -> tuple[str, float]:
-        """Classify error and determine action.
-
+        """
+        Determine the appropriate recovery action for a CLI failure and, when applicable, how long to wait before retrying.
+        
+        Checks for OAuth expiration and raises ClaudeOAuthError when reauthentication is required. If retrying on rate limits is enabled and a rate-limit is detected, returns ("retry_rate_limit", wait_seconds) where wait_seconds is the computed delay. If an infrastructure-level CLI failure is detected, returns ("retry_infra", 0.0). For other errors, raises RuntimeError with a contextual message including elapsed time and stderr output.
+        
+        Parameters:
+            stdout_text (str): Captured standard output from the CLI process.
+            stderr_text (str): Captured standard error from the CLI process.
+            returncode (int): Process exit code.
+            elapsed (float): Seconds elapsed while the process ran.
+            retry_enabled (bool): Whether rate-limit retry logic is permitted.
+            cwd (str): Working directory where the CLI was executed (used for context in messages).
+        
         Returns:
-            Tuple of (action, wait_seconds)
-
+            tuple[str, float]: A pair (action, wait_seconds). `action` is one of:
+                - "retry_rate_limit": wait and retry after `wait_seconds`.
+                - "retry_infra": indicate an infrastructure retry (wait_seconds is 0.0).
         Raises:
-            ClaudeOAuthError: For OAuth errors
-            RuntimeError: For generic errors
+            ClaudeOAuthError: If output indicates an expired or invalid OAuth session and reauthentication is required.
+            RuntimeError: For non-retriable failures; message includes elapsed time and stderr output.
         """
         # Check OAuth first
         is_oauth, oauth_msg = detect_oauth_error(stdout_text, stderr_text)
@@ -406,13 +443,19 @@ class EnhancedCLITransport:
         raise RuntimeError(msg)
 
     def _process_response(self, raw_stdout: str) -> ClaudeJSONResponse:
-        """Process CLI response.
-
-        Args:
-            raw_stdout: Raw stdout from CLI
-
+        """
+        Parse Claude CLI stdout into a ClaudeJSONResponse.
+        
+        Strips an initial "Running: " diagnostic line if present, parses the JSON output, and when the output is a list selects the event with type "result". Validates that the parsed response does not indicate an error and saves the raw response to the configured working directory.
+        
+        Parameters:
+            raw_stdout (str): Raw stdout text produced by the Claude CLI.
+        
         Returns:
-            Parsed response
+            ClaudeJSONResponse: The parsed response object extracted from the CLI output.
+        
+        Raises:
+            RuntimeError: If a "result" event cannot be found in verbose (list) output, or if the parsed response indicates an error.
         """
         # Strip srt diagnostic output
         if raw_stdout.startswith("Running: "):

@@ -16,20 +16,23 @@ logger = logging.getLogger(__name__)
 
 
 def create_structured_output_path() -> str:
-    """Create a temporary directory path for structured output.
-
+    """
+    Create a unique temporary directory path for storing structured output.
+    
     Returns:
-        Path to temporary directory for structured output
+        str: Path string of the form /tmp/claude_data_structure_<8-hex-chars>
     """
     unique_id = uuid.uuid4().hex[:8]
     return f"/tmp/claude_data_structure_{unique_id}"
 
 
 def create_unstructured_output_path() -> str:
-    """Create a temporary file path for unstructured output.
-
+    """
+    Generate a unique temporary file path for unstructured output.
+    
     Returns:
-        Path to temporary file for unstructured output
+        A path string for the temporary unstructured output file, formatted as
+        '/tmp/claude_unstructured_output_<8-hex-suffix>.txt'.
     """
     unique_id = uuid.uuid4().hex[:8]
     return f"/tmp/claude_unstructured_output_{unique_id}.txt"
@@ -39,17 +42,18 @@ def read_structured_output(
     schema: dict[str, Any],
     output_dir: str,
 ) -> dict[str, Any]:
-    """Read structured output from filesystem structure.
-
-    Args:
-        schema: JSON schema defining the expected structure
-        output_dir: Directory containing the file/folder structure
-
+    """
+    Assemble a dictionary by reading files in output_dir according to the provided schema.
+    
+    Parameters:
+        schema (dict[str, Any]): JSON schema describing the expected file/folder structure and types.
+        output_dir (str): Path to the directory containing the files and/or subdirectories that represent the structured output.
+    
     Returns:
-        Assembled data dictionary
-
+        dict[str, Any]: The assembled data matching the schema.
+    
     Raises:
-        RuntimeError: If structure doesn't match schema
+        RuntimeError: If the output directory does not exist.
     """
     output_path = Path(output_dir)
 
@@ -63,16 +67,17 @@ def read_structured_output(
 
 
 def read_unstructured_output(output_file: str) -> str:
-    """Read unstructured output from file.
-
-    Args:
-        output_file: Path to the output file
-
+    """
+    Read unstructured output from the given file.
+    
+    Parameters:
+        output_file (str): Path to the unstructured output file.
+    
     Returns:
-        Content of the output file
-
+        The file's contents as a string.
+    
     Raises:
-        RuntimeError: If file doesn't exist
+        RuntimeError: If the file does not exist.
     """
     output_path = Path(output_file)
 
@@ -89,10 +94,13 @@ def read_unstructured_output(output_file: str) -> str:
 
 
 def cleanup_output_file(output_path: str) -> None:
-    """Clean up temporary output file or directory.
-
-    Args:
-        output_path: Path to clean up
+    """
+    Remove a temporary file or directory at the given path.
+    
+    If the path refers to a directory, it is removed recursively; if it refers to a file, the file is deleted. Any errors encountered during cleanup are logged and not raised.
+    
+    Parameters:
+        output_path (str): Path to the temporary file or directory to remove.
     """
     path = Path(output_path)
     try:

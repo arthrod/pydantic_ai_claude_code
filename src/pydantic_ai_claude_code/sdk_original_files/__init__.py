@@ -30,7 +30,15 @@ NEXT_REVIEW_DATE = "2024-04-20"
 
 
 def get_sdk_info() -> dict:
-    """Get SDK import information."""
+    """
+    Return SDK metadata for the compatibility layer.
+    
+    Returns:
+        dict: A mapping with keys:
+            - "version": SDK version string.
+            - "last_import": ISO date string (YYYY-MM-DD) of the last import.
+            - "next_review": ISO date string (YYYY-MM-DD) of the next review.
+    """
     return {
         "version": SDK_VERSION,
         "last_import": LAST_IMPORT_DATE,

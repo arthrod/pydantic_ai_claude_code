@@ -63,10 +63,13 @@ def resolve_sandbox_runtime_path(settings: dict[str, Any] | None = None) -> str:
 
 
 def build_sandbox_config() -> dict[str, Any]:
-    """Build sandbox configuration for Claude execution.
-
+    """
+    Create the sandbox permissions configuration used when running Claude in the sandbox.
+    
+    The configuration includes an ordered list of allowed permission strings (e.g., shell access, read/write/edit to /tmp, and WebFetch access to api.anthropic.com).
+    
     Returns:
-        Sandbox configuration dict with permissions
+        sandbox_config (dict[str, Any]): A dict with a "permissions" key whose "allow" value is a list of permission specifiers.
     """
     return {
         "permissions": {
@@ -85,14 +88,15 @@ def wrap_command_with_sandbox(
     cmd: list[str],
     settings: dict[str, Any] | None = None
 ) -> tuple[list[str], dict[str, str]]:
-    """Wrap Claude command with sandbox runtime.
-
-    Args:
-        cmd: Original Claude CLI command
-        settings: Optional settings for configuration
-
+    """
+    Wrap a Claude CLI command so it runs under the sandbox-runtime with a sandboxed configuration and environment.
+    
+    Parameters:
+        cmd (list[str]): The original Claude CLI command and its arguments.
+        settings (dict[str, Any] | None): Optional settings; if it contains `sandbox_runtime_path` that path is used to locate the sandbox runtime.
+    
     Returns:
-        Tuple of (wrapped_command, environment_vars)
+        tuple[list[str], dict[str, str]]: A tuple where the first element is the wrapped command (invoking the sandbox runtime with a temporary settings file and the original command) and the second element is an environment dictionary for the sandbox (includes `IS_SANDBOX` and `CLAUDE_CONFIG_DIR`).
     """
     settings = settings or {}
     srt_path = resolve_sandbox_runtime_path(settings)
