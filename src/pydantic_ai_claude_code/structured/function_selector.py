@@ -17,16 +17,23 @@ logger = logging.getLogger(__name__)
 def build_function_selection_prompt(
     function_tools: list[dict[str, Any]]
 ) -> tuple[str, dict[str, dict[str, Any]]]:
-    """Build prompt for function selection phase.
-
-    Creates a prompt that presents available functions to Claude and
-    asks it to select one or indicate "none" for direct response.
-
+    """
+    Constructs a prompt that asks the model to choose one of the available functions or to respond directly.
+    
+    Builds a human-readable prompt enumerating each provided tool and appends strict instructions requiring the model to reply with a single-line choice "CHOICE: <function_name>" or "CHOICE: none". The function also returns a mapping of available functions to their descriptions and parameter schemas for downstream validation.
+    
     Args:
-        function_tools: List of function tool definitions
-
+        function_tools: List of tool definitions. Each tool is expected to be a dict and may include:
+            - "name" (str): optional function name; a default name will be generated if missing.
+            - "description" (str): optional human-readable description.
+            - "parameters_json_schema" (dict): optional JSON Schema describing the function's parameters.
+    
     Returns:
-        Tuple of (prompt_string, available_functions_dict)
+        tuple: A pair (prompt_string, available_functions) where:
+            - prompt_string (str): The complete prompt text to present to the model.
+            - available_functions (dict): Mapping from function name to a dict with keys:
+                - "description" (str): the tool's description.
+                - "parameters" (dict): the tool's parameters JSON Schema (may be empty).
     """
     available_functions: dict[str, dict[str, Any]] = {}
 
@@ -79,13 +86,14 @@ def build_function_selection_prompt(
 
 
 def parse_function_selection(response_text: str) -> str | None:
-    """Parse function selection from Claude's response.
-
-    Args:
-        response_text: Claude's response text
-
+    """
+    Extract the selected function name from Claude's response.
+    
+    Parameters:
+        response_text (str): Raw text returned by Claude containing a single line like "CHOICE: <function_name>" or "CHOICE: none".
+    
     Returns:
-        Selected function name, "none", or None if parsing fails
+        str | None: Lowercase function name selected, the string "none" if no function should be called, or `None` if no valid CHOICE line could be parsed.
     """
     # Look for CHOICE: pattern
     match = re.search(r"CHOICE:\s*(\w+)", response_text, re.IGNORECASE)
@@ -105,19 +113,17 @@ def build_argument_collection_prompt(
     parameters_schema: dict[str, Any],
     temp_dir: str,
 ) -> str:
-    """Build prompt for argument collection phase.
-
-    Creates instructions for Claude to extract function arguments
-    from the user's request and write them to the file structure.
-
-    Args:
-        function_name: Name of the selected function
-        function_description: Description of the function
-        parameters_schema: JSON schema for function parameters
-        temp_dir: Temporary directory for output structure
-
+    """
+    Builds a prompt instructing Claude to extract the selected function's arguments and write them into a structured output under the given temporary directory.
+    
+    Parameters:
+        function_name (str): Name of the selected function.
+        function_description (str): Short description of the selected function.
+        parameters_schema (dict[str, Any]): JSON Schema describing expected function parameters.
+        temp_dir (str): Path to the temporary directory where the model should write the structured output.
+    
     Returns:
-        Prompt string for argument collection
+        str: Prompt string that directs the model to produce and store arguments conforming to `parameters_schema` in `temp_dir`.
     """
     # Use the structure converter to build instructions
     return build_structure_instructions(
@@ -134,16 +140,19 @@ def build_retry_prompt(
     temp_dir: str,
     error_message: str,
 ) -> str:
-    """Build retry prompt when argument validation fails.
-
-    Args:
-        original_prompt: The original argument collection prompt
-        schema: Parameter schema
-        temp_dir: New temporary directory for retry
-        error_message: Error message from validation failure
-
+    """
+    Build a retry prompt that requests corrected function arguments after a validation error.
+    
+    Includes the provided validation error message and regenerates the structured argument-collection instructions using the given schema and a new temporary directory.
+    
+    Parameters:
+        original_prompt (str): The original argument collection prompt (kept for context).
+        schema (dict[str, Any]): JSON schema describing the function parameters to collect.
+        temp_dir (str): Path to a new temporary directory where the structured output should be written.
+        error_message (str): Validation error message explaining why the previous attempt failed.
+    
     Returns:
-        Retry prompt with error context
+        str: A complete retry prompt containing the error context and regenerated structure instructions.
     """
     lines = [
         "# Retry: Argument Collection",

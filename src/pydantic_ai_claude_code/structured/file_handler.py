@@ -16,20 +16,22 @@ logger = logging.getLogger(__name__)
 
 
 def create_structured_output_path() -> str:
-    """Create a temporary directory path for structured output.
-
+    """
+    Create a unique temporary directory path for structured output.
+    
     Returns:
-        Path to temporary directory for structured output
+        A path string in /tmp of the form 'claude_data_structure_<8-hex-id>'.
     """
     unique_id = uuid.uuid4().hex[:8]
     return f"/tmp/claude_data_structure_{unique_id}"
 
 
 def create_unstructured_output_path() -> str:
-    """Create a temporary file path for unstructured output.
-
+    """
+    Create a filesystem path for a temporary unstructured output file in /tmp with a short unique identifier.
+    
     Returns:
-        Path to temporary file for unstructured output
+        file_path (str): Path to the temporary unstructured output file (e.g. `/tmp/claude_unstructured_output_<id>.txt`).
     """
     unique_id = uuid.uuid4().hex[:8]
     return f"/tmp/claude_unstructured_output_{unique_id}.txt"
@@ -39,17 +41,18 @@ def read_structured_output(
     schema: dict[str, Any],
     output_dir: str,
 ) -> dict[str, Any]:
-    """Read structured output from filesystem structure.
-
-    Args:
-        schema: JSON schema defining the expected structure
-        output_dir: Directory containing the file/folder structure
-
+    """
+    Assemble structured data from files in a directory according to the provided schema.
+    
+    Parameters:
+        schema (dict[str, Any]): Schema describing the expected file/directory structure and types.
+        output_dir (str): Path to the directory containing files and subdirectories to read.
+    
     Returns:
-        Assembled data dictionary
-
+        dict[str, Any]: Assembled data dictionary matching the schema.
+    
     Raises:
-        RuntimeError: If structure doesn't match schema
+        RuntimeError: If the specified output directory does not exist.
     """
     output_path = Path(output_dir)
 
@@ -89,10 +92,14 @@ def read_unstructured_output(output_file: str) -> str:
 
 
 def cleanup_output_file(output_path: str) -> None:
-    """Clean up temporary output file or directory.
-
-    Args:
-        output_path: Path to clean up
+    """
+    Remove a file or directory tree at the given path.
+    
+    Parameters:
+        output_path (str): Path to the file or directory to remove. If the path is a directory, its entire tree will be deleted.
+    
+    Notes:
+        Exceptions raised during removal are caught and logged; this function does not propagate errors.
     """
     path = Path(output_path)
     try:
