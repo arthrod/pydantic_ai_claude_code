@@ -52,6 +52,13 @@ import logging
 from .exceptions import ClaudeOAuthError
 from .model import ClaudeCodeModel
 from .provider import ClaudeCodeProvider
+from .provider_presets import (
+    ProviderPreset,
+    get_preset,
+    get_presets_by_category,
+    list_presets,
+    load_all_presets,
+)
 from .registration import register_claude_code_model
 from .types import ClaudeCodeSettings
 
@@ -77,4 +84,9 @@ __all__ = [
     "ClaudeCodeProvider",
     "ClaudeCodeSettings",
     "ClaudeOAuthError",
+    "ProviderPreset",
+    "get_preset",
+    "get_presets_by_category",
+    "list_presets",
+    "load_all_presets",
 ]

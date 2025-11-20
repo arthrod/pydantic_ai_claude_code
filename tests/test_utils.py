@@ -27,7 +27,7 @@ def test_build_claude_command_basic():
         assert "--print" in cmd
         assert "--output-format" in cmd
         assert "json" in cmd
-        assert "Follow the instructions in prompt.md" in cmd
+        # Note: Prompts are now passed via stdin, not command-line arguments
 
 
 def test_build_claude_command_with_settings():
@@ -184,10 +184,7 @@ def test_build_claude_command_with_extra_cli_args():
         assert "--mcp-config" in cmd
         assert "config.json" in cmd
 
-        # Extra args should come before the prompt instruction
-        prompt_idx = cmd.index("Follow the instructions in prompt.md")
-        debug_idx = cmd.index("--debug")
-        assert debug_idx < prompt_idx
+        # Note: Prompts are now passed via stdin, not command-line arguments
 
 
 def test_build_claude_command_with_multiple_extra_args():
@@ -228,7 +225,7 @@ def test_build_claude_command_without_extra_args():
         assert cmd[0] == "/usr/bin/claude"
         assert "--model" in cmd
         assert "opus" in cmd
-        assert "Follow the instructions in prompt.md" in cmd
+        # Note: Prompts are now passed via stdin, not command-line arguments
 
 
 def test_detect_oauth_error_oauth_token_revoked():

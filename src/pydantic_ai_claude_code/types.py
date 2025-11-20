@@ -157,6 +157,12 @@ class ClaudeCodeSettings(TypedDict, total=False):
     # Sandbox settings (requires @anthropic-ai/sandbox-runtime installed)
     use_sandbox_runtime: bool  # Enable sandbox-runtime wrapping with IS_SANDBOX=1 (default: True)
     sandbox_runtime_path: str | None  # Path to srt binary (defaults to auto-resolved from PATH)
+
+    # Provider preset settings
+    provider_preset: str | None  # Provider preset ID (e.g., "deepseek", "zhipu_glm")
+    provider_api_key: str | None  # API key for the provider (overrides ANTHROPIC_AUTH_TOKEN/ANTHROPIC_API_KEY)
+    provider_template_vars: dict[str, str]  # Template variable values (e.g., {"ENDPOINT_ID": "ep-xxx"})
+    provider_override_env: bool  # Override existing environment variables (default: False)
     __structured_output_file: str  # Internal: temp file path for structured output
     __unstructured_output_file: str  # Internal: temp file path for unstructured output
     __function_call_file: str  # Internal: temp file path for function call JSON

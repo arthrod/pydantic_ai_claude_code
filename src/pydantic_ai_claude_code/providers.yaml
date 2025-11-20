@@ -1,0 +1,290 @@
+# Provider presets for pydantic-ai-claude-code
+# This file contains preset configurations for various AI providers
+# that implement Anthropic-compatible APIs.
+
+providers:
+  # Official Claude provider (default)
+  claude_official:
+    name: "Claude Official"
+    website_url: "https://www.anthropic.com/claude-code"
+    is_official: true
+    category: "official"
+    settings:
+      env: {}
+    theme:
+      icon: "claude"
+      background_color: "#D97757"
+      text_color: "#FFFFFF"
+
+  # Chinese Official Providers
+  deepseek:
+    name: "DeepSeek"
+    website_url: "https://platform.deepseek.com"
+    category: "cn_official"
+    settings:
+      env:
+        ANTHROPIC_BASE_URL: "https://api.deepseek.com/anthropic"
+        ANTHROPIC_MODEL: "DeepSeek-V3.2-Exp"
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "DeepSeek-V3.2-Exp"
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "DeepSeek-V3.2-Exp"
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "DeepSeek-V3.2-Exp"
+    models:
+      default: "DeepSeek-V3.2-Exp"
+      haiku: "DeepSeek-V3.2-Exp"
+      sonnet: "DeepSeek-V3.2-Exp"
+      opus: "DeepSeek-V3.2-Exp"
+
+  zhipu_glm:
+    name: "Zhipu GLM"
+    website_url: "https://open.bigmodel.cn"
+    api_key_url: "https://www.bigmodel.cn/claude-code?ic=RRVJPB5SII"
+    category: "cn_official"
+    is_partner: true
+    partner_promotion_key: "zhipu"
+    settings:
+      env:
+        ANTHROPIC_BASE_URL: "https://open.bigmodel.cn/api/anthropic"
+        ANTHROPIC_MODEL: "glm-4.6"
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "glm-4.5-air"
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "glm-4.6"
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "glm-4.6"
+    models:
+      default: "glm-4.6"
+      haiku: "glm-4.5-air"
+      sonnet: "glm-4.6"
+      opus: "glm-4.6"
+
+  zai_glm:
+    name: "Z.ai GLM"
+    website_url: "https://z.ai"
+    api_key_url: "https://z.ai/subscribe?ic=8JVLJQFSKB"
+    category: "cn_official"
+    is_partner: true
+    partner_promotion_key: "zhipu"
+    settings:
+      env:
+        ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic"
+        ANTHROPIC_MODEL: "glm-4.6"
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "glm-4.5-air"
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "glm-4.6"
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "glm-4.6"
+    models:
+      default: "glm-4.6"
+      haiku: "glm-4.5-air"
+      sonnet: "glm-4.6"
+      opus: "glm-4.6"
+
+  qwen_coder:
+    name: "Qwen Coder"
+    website_url: "https://bailian.console.aliyun.com"
+    category: "cn_official"
+    settings:
+      env:
+        ANTHROPIC_BASE_URL: "https://dashscope.aliyuncs.com/api/v2/apps/claude-code-proxy"
+        ANTHROPIC_MODEL: "qwen3-max"
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "qwen3-max"
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "qwen3-max"
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "qwen3-max"
+    models:
+      default: "qwen3-max"
+      haiku: "qwen3-max"
+      sonnet: "qwen3-max"
+      opus: "qwen3-max"
+
+  kimi_k2:
+    name: "Kimi k2"
+    website_url: "https://platform.moonshot.cn/console"
+    category: "cn_official"
+    settings:
+      env:
+        ANTHROPIC_BASE_URL: "https://api.moonshot.cn/anthropic"
+        ANTHROPIC_MODEL: "kimi-k2-thinking"
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "kimi-k2-thinking"
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "kimi-k2-thinking"
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "kimi-k2-thinking"
+    models:
+      default: "kimi-k2-thinking"
+      haiku: "kimi-k2-thinking"
+      sonnet: "kimi-k2-thinking"
+      opus: "kimi-k2-thinking"
+
+  kimi_for_coding:
+    name: "Kimi For Coding"
+    website_url: "https://www.kimi.com/coding/docs/"
+    category: "cn_official"
+    settings:
+      env:
+        ANTHROPIC_BASE_URL: "https://api.kimi.com/coding/"
+        ANTHROPIC_MODEL: "kimi-for-coding"
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "kimi-for-coding"
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "kimi-for-coding"
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "kimi-for-coding"
+    models:
+      default: "kimi-for-coding"
+      haiku: "kimi-for-coding"
+      sonnet: "kimi-for-coding"
+      opus: "kimi-for-coding"
+
+  modelscope:
+    name: "ModelScope"
+    website_url: "https://modelscope.cn"
+    category: "aggregator"
+    settings:
+      env:
+        ANTHROPIC_BASE_URL: "https://api-inference.modelscope.cn"
+        ANTHROPIC_MODEL: "ZhipuAI/GLM-4.6"
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "ZhipuAI/GLM-4.6"
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "ZhipuAI/GLM-4.6"
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "ZhipuAI/GLM-4.6"
+    models:
+      default: "ZhipuAI/GLM-4.6"
+      haiku: "ZhipuAI/GLM-4.6"
+      sonnet: "ZhipuAI/GLM-4.6"
+      opus: "ZhipuAI/GLM-4.6"
+
+  kat_coder:
+    name: "KAT-Coder"
+    website_url: "https://console.streamlake.ai"
+    api_key_url: "https://console.streamlake.ai/console/api-key"
+    category: "cn_official"
+    settings:
+      env:
+        ANTHROPIC_BASE_URL: "https://vanchin.streamlake.ai/api/gateway/v1/endpoints/${ENDPOINT_ID}/claude-code-proxy"
+        ANTHROPIC_MODEL: "KAT-Coder-Pro V1"
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "KAT-Coder-Air V1"
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "KAT-Coder-Pro V1"
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "KAT-Coder-Pro V1"
+    models:
+      default: "KAT-Coder-Pro V1"
+      haiku: "KAT-Coder-Air V1"
+      sonnet: "KAT-Coder-Pro V1"
+      opus: "KAT-Coder-Pro V1"
+    template_values:
+      ENDPOINT_ID:
+        label: "Vanchin Endpoint ID"
+        placeholder: "ep-xxx-xxx"
+        default_value: ""
+
+  longcat:
+    name: "Longcat"
+    website_url: "https://longcat.chat/platform"
+    api_key_url: "https://longcat.chat/platform/api_keys"
+    category: "cn_official"
+    settings:
+      env:
+        ANTHROPIC_BASE_URL: "https://api.longcat.chat/anthropic"
+        ANTHROPIC_MODEL: "LongCat-Flash-Chat"
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "LongCat-Flash-Chat"
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "LongCat-Flash-Chat"
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "LongCat-Flash-Chat"
+        CLAUDE_CODE_MAX_OUTPUT_TOKENS: "6000"
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+    models:
+      default: "LongCat-Flash-Chat"
+      haiku: "LongCat-Flash-Chat"
+      sonnet: "LongCat-Flash-Chat"
+      opus: "LongCat-Flash-Chat"
+
+  minimax:
+    name: "MiniMax"
+    website_url: "https://platform.minimaxi.com"
+    api_key_url: "https://platform.minimaxi.com/user-center/basic-information"
+    category: "cn_official"
+    settings:
+      env:
+        ANTHROPIC_BASE_URL: "https://api.minimaxi.com/anthropic"
+        API_TIMEOUT_MS: "3000000"
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+        ANTHROPIC_MODEL: "MiniMax-M2"
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "MiniMax-M2"
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "MiniMax-M2"
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "MiniMax-M2"
+    models:
+      default: "MiniMax-M2"
+      haiku: "MiniMax-M2"
+      sonnet: "MiniMax-M2"
+      opus: "MiniMax-M2"
+
+  doubaoseed:
+    name: "DouBaoSeed"
+    website_url: "https://www.volcengine.com/product/doubao"
+    api_key_url: "https://www.volcengine.com/product/doubao"
+    category: "cn_official"
+    settings:
+      env:
+        ANTHROPIC_BASE_URL: "https://ark.cn-beijing.volces.com/api/coding"
+        API_TIMEOUT_MS: "3000000"
+        ANTHROPIC_MODEL: "doubao-seed-code-preview-latest"
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "doubao-seed-code-preview-latest"
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "doubao-seed-code-preview-latest"
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "doubao-seed-code-preview-latest"
+    models:
+      default: "doubao-seed-code-preview-latest"
+      haiku: "doubao-seed-code-preview-latest"
+      sonnet: "doubao-seed-code-preview-latest"
+      opus: "doubao-seed-code-preview-latest"
+
+  bailing:
+    name: "BaiLing"
+    website_url: "https://alipaytbox.yuque.com/sxs0ba/ling/get_started"
+    category: "cn_official"
+    settings:
+      env:
+        ANTHROPIC_BASE_URL: "https://api.tbox.cn/api/anthropic"
+        ANTHROPIC_MODEL: "Ling-1T"
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "Ling-1T"
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "Ling-1T"
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "Ling-1T"
+    models:
+      default: "Ling-1T"
+      haiku: "Ling-1T"
+      sonnet: "Ling-1T"
+      opus: "Ling-1T"
+
+  # Aggregators and Third-party Providers
+  aihubmix:
+    name: "AiHubMix"
+    website_url: "https://aihubmix.com"
+    api_key_url: "https://aihubmix.com"
+    category: "aggregator"
+    api_key_field: "ANTHROPIC_API_KEY"
+    settings:
+      env:
+        ANTHROPIC_BASE_URL: "https://aihubmix.com"
+    endpoint_candidates:
+      - "https://aihubmix.com"
+      - "https://api.aihubmix.com"
+
+  dmxapi:
+    name: "DMXAPI"
+    website_url: "https://www.dmxapi.cn"
+    api_key_url: "https://www.dmxapi.cn"
+    category: "aggregator"
+    api_key_field: "ANTHROPIC_API_KEY"
+    settings:
+      env:
+        ANTHROPIC_BASE_URL: "https://www.dmxapi.cn"
+    endpoint_candidates:
+      - "https://aihubmix.com"
+      - "https://api.aihubmix.com"
+
+  packycode:
+    name: "PackyCode"
+    website_url: "https://www.packyapi.com"
+    api_key_url: "https://www.packyapi.com/register?aff=cc-switch"
+    category: "third_party"
+    is_partner: true
+    partner_promotion_key: "packycode"
+    settings:
+      env:
+        ANTHROPIC_BASE_URL: "https://www.packyapi.com"
+    endpoint_candidates:
+      - "https://www.packyapi.com"
+      - "https://api-slb.packyapi.com"
+
+# Category definitions
+categories:
+  official: "Official Anthropic"
+  cn_official: "Chinese Official Providers"
+  aggregator: "Aggregators"
+  third_party: "Third-party Providers"
