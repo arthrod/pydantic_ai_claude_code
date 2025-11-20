@@ -54,6 +54,15 @@ class TestToolRegistration:
             schema={"type": "object"},
         )
         async def my_handler(x: str) -> str:
+            """
+            Process the input string by prefixing it with "processed: ".
+            
+            Parameters:
+                x (str): Input string to be processed.
+            
+            Returns:
+                result (str): The input string prefixed with "processed: ".
+            """
             return f"processed: {x}"
 
         tool = tools.get_tool("decorated_tool")
@@ -132,6 +141,17 @@ class TestPermissions:
 
         # Set custom callback that always allows
         async def custom_callback(name, input, context):
+            """
+            Allow the specified tool invocation unconditionally with a custom message.
+            
+            Parameters:
+                name (str): The registered tool name being queried.
+                input (dict | Any): The input arguments provided for the tool invocation.
+                context (Any): Additional context for the permission decision (e.g., call metadata).
+            
+            Returns:
+                PermissionResult: A result with `behavior` set to `"allow"` and `message` set to `"Custom allowed"`.
+            """
             return PermissionResult(
                 behavior="allow",
                 message="Custom allowed",
@@ -193,6 +213,12 @@ class TestToolExecution:
             },
         )
         async def add(a: int, b: int) -> int:
+            """
+            Compute the sum of two integers.
+            
+            Returns:
+                The sum of a and b.
+            """
             return a + b
 
         result = await tools.execute_tool("adder", {"a": 2, "b": 3})
@@ -212,6 +238,12 @@ class TestToolExecution:
             },
         )
         async def greet(name: str) -> str:
+            """
+            Return a greeting message for the given name.
+            
+            Returns:
+                Greeting string in the form "Hello, {name}!".
+            """
             return f"Hello, {name}!"
 
         await tools.execute_tool("greeter", {"name": "World"})
@@ -233,7 +265,9 @@ class TestToolExecution:
 
     @pytest.mark.asyncio
     async def test_execute_tool_no_handler_raises(self):
-        """Test that executing tool without handler raises."""
+        """
+        Verify that executing a registered tool with no handler raises a ValueError containing "No handler".
+        """
         tools = CCTools()
 
         tools.register_tool(
@@ -257,6 +291,12 @@ class TestToolExecution:
             schema={},
         )
         async def fail() -> str:
+            """
+            Raise a ValueError used to simulate an intentional failure for testing.
+            
+            Raises:
+                ValueError: "Intentional failure"
+            """
             raise ValueError("Intentional failure")
 
         with pytest.raises(ValueError, match="Intentional failure"):

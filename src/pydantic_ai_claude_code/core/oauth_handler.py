@@ -12,25 +12,20 @@ logger = logging.getLogger(__name__)
 
 
 def detect_oauth_error(stdout: str, stderr: str) -> tuple[bool, str | None]:
-    """Detect OAuth authentication errors from Claude CLI output.
-
-    The CLI returns OAuth errors in the JSON response (stdout), not stderr.
-    Example response:
-    {
-        "type": "result",
-        "subtype": "success",
-        "is_error": true,
-        "result": "OAuth token revoked - Please run /login"
-    }
-
-    Args:
-        stdout: Standard output from Claude CLI (may contain JSON response)
-        stderr: Standard error output (typically empty for OAuth errors)
-
+    """
+    Determine whether Claude CLI output indicates an OAuth/authentication error.
+    
+    If the first line of stdout is a JSON object with `is_error` true and its `result` or `error`
+    text contains OAuth/authentication indicators (e.g., token revoked, login prompts), the
+    function reports an OAuth error and returns the extracted message.
+    
+    Parameters:
+        stdout (str): Standard output from Claude CLI; may contain a JSON response on the first line.
+        stderr (str): Standard error output (typically unused for OAuth detection).
+    
     Returns:
-        Tuple of (is_oauth_error, error_message)
-        - is_oauth_error: True if this is an OAuth/authentication error
-        - error_message: The error message from the CLI, or None if not an OAuth error
+        tuple[bool, str | None]: `(True, message)` if an OAuth/authentication error was detected,
+        where `message` is the CLI error text; `(False, None)` otherwise.
     """
     if not stdout:
         return False, None

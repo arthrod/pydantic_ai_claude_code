@@ -41,15 +41,22 @@ class SDKAdapter:
         model_request_parameters: Optional[Any] = None,
     ) -> str:
         """
-        Convert Pydantic AI messages to SDK prompt string.
-
-        Args:
-            messages: List of Pydantic AI messages
-            include_system: Whether to include system prompts
-            model_request_parameters: Optional parameters
-
+        Convert a sequence of Pydantic AI messages into a single SDK-formatted prompt string.
+        
+        Each message part is rendered with a role prefix:
+        - System parts as "System: {content}" (included only when include_system is True)
+        - User parts as "User: {content}"
+        - Assistant text parts as "Assistant: {content}"
+        - Tool return parts as "Tool Result ({tool_name}): {content}"
+        - Tool call parts as "Tool Call: {tool_name}({args})"
+        
+        Parameters:
+            messages (list[ModelMessage]): Messages to convert; may be ModelRequest (with prompt parts) or ModelResponse (with response parts).
+            include_system (bool): Whether to include system prompt parts in the output.
+            model_request_parameters (Optional[Any]): Optional model request parameters (not used in formatting, accepted for API compatibility).
+        
         Returns:
-            Formatted prompt string
+            str: The prompt string with message parts joined by two newlines.
         """
         parts = []
 
@@ -83,14 +90,14 @@ class SDKAdapter:
         model_name: str = "claude-code",
     ) -> ModelResponse:
         """
-        Convert SDK messages to Pydantic AI ModelResponse.
-
-        Args:
-            sdk_messages: List of SDK messages
-            model_name: Model name for response
-
+        Convert a sequence of SDK-formatted messages into a Pydantic AI ModelResponse.
+        
+        Parameters:
+            sdk_messages (list[Any]): Messages from the Claude SDK; each item may be a dict or object with a `type` of "assistant", "result", or "tool_use". Relevant content, tool call data, and usage are extracted when present.
+            model_name (str): Model name to set on the returned ModelResponse.
+        
         Returns:
-            Pydantic AI ModelResponse
+            ModelResponse: A response containing one or more Parts (TextPart or ToolCallPart), a UTC timestamp, and usage data if available.
         """
         parts = []
         usage = None
@@ -135,7 +142,18 @@ class SDKAdapter:
         )
 
     def _extract_assistant_content(self, msg: Any) -> Optional[str]:
-        """Extract text content from assistant message."""
+        """
+        Extract the assistant's textual content from an SDK-style message.
+        
+        Parameters:
+            msg (Any): Assistant message in either dict form or an object with a `content` attribute.
+                Supported shapes:
+                - dict with a string `content` or a list of blocks where blocks may be strings or dicts with `"type": "text"` and `"text"`.
+                - object with a string `content` or an iterable of block objects with `text` attributes or `type == "text"`.
+        
+        Returns:
+            str | None: Concatenated text from all text blocks separated by newlines if any text is found, otherwise `None`.
+        """
         if isinstance(msg, dict):
             # Dict format
             content = msg.get("content", [])
@@ -166,14 +184,27 @@ class SDKAdapter:
         return None
 
     def _extract_result_content(self, msg: Any) -> Optional[str]:
-        """Extract result content from result message."""
+        """
+        Retrieve the "result" value from a result message.
+        
+        Parameters:
+            msg (Any): A message represented as a dict or an object; for dicts the function reads the "result" key, for objects it reads the `result` attribute.
+        
+        Returns:
+            The result string from the message, or an empty string if no result is present.
+        """
         if isinstance(msg, dict):
             return msg.get("result", "")
         else:
             return getattr(msg, "result", "")
 
     def _extract_usage(self, msg: Any) -> Optional[RequestUsage]:
-        """Extract usage information from message."""
+        """
+        Extract token-usage data from a message that may be a dict or an object.
+        
+        Returns:
+            `RequestUsage` with `input_tokens` and `output_tokens` (missing fields default to 0) if usage information is present, `None` otherwise.
+        """
         if isinstance(msg, dict):
             usage_data = msg.get("usage", {})
         else:
@@ -194,7 +225,15 @@ class SDKAdapter:
             )
 
     def _extract_tool_call(self, msg: Any) -> Optional[ToolCallPart]:
-        """Extract tool call from message."""
+        """
+        Builds a ToolCallPart from an SDK tool-use message.
+        
+        Parameters:
+        	msg (Any): Message object or dict expected to contain `name`, `input`, and `id` fields. If `name` is missing the tool name is set to "unknown"; if `input` is missing `args` defaults to an empty dict; if `id` is missing a unique tool call id is generated.
+        
+        Returns:
+        	ToolCallPart: A ToolCallPart constructed from the message's tool name, arguments, and tool call id.
+        """
         if isinstance(msg, dict):
             return ToolCallPart(
                 tool_name=msg.get("name", "unknown"),
@@ -209,18 +248,26 @@ class SDKAdapter:
             )
 
     def _generate_tool_call_id(self) -> str:
-        """Generate unique tool call ID."""
+        """
+        Generate a unique identifier for a tool call.
+        
+        Returns:
+            tool_call_id (str): Identifier string formatted as "call_<16-hex-chars>".
+        """
         return f"call_{uuid.uuid4().hex[:16]}"
 
     def model_response_to_dict(self, response: ModelResponse) -> dict[str, Any]:
         """
-        Convert ModelResponse to dictionary format.
-
-        Args:
-            response: Pydantic AI ModelResponse
-
+        Convert a ModelResponse into a plain dictionary suitable for serialization.
+        
         Returns:
-            Dictionary representation
+            A dictionary with keys:
+              - "model_name": the response.model_name.
+              - "timestamp": ISO-formatted timestamp or None.
+              - "parts": a list where each item is either
+                  {"type": "text", "content": <str>} or
+                  {"type": "tool_call", "tool_name": <str>, "args": <Any>, "tool_call_id": <str>}.
+              - "usage" (optional): a dict with "input_tokens", "output_tokens", and "total_tokens".
         """
         result = {
             "model_name": response.model_name,
@@ -257,7 +304,12 @@ _adapter = None
 
 
 def get_adapter() -> SDKAdapter:
-    """Get the global SDK adapter instance."""
+    """
+    Return the shared SDKAdapter singleton instance.
+    
+    Returns:
+        SDKAdapter: The global SDKAdapter instance, creating it on first access if necessary.
+    """
     global _adapter
     if _adapter is None:
         _adapter = SDKAdapter()

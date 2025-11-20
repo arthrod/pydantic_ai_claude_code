@@ -12,13 +12,14 @@ logger = logging.getLogger(__name__)
 
 
 def detect_rate_limit(error_output: str) -> tuple[bool, str | None]:
-    """Detect rate limit error and extract reset time.
-
-    Args:
-        error_output: Combined stdout + stderr from Claude CLI
-
+    """
+    Detect whether the CLI output indicates a rate limit and extract the suggested reset time.
+    
+    Parameters:
+        error_output (str): Combined stdout and stderr from the Claude CLI.
+    
     Returns:
-        Tuple of (is_rate_limited, reset_time_str)
+        tuple: (is_rate_limited, reset_time_str) where `is_rate_limited` is `True` if a rate-limit pattern was found, `False` otherwise, and `reset_time_str` is the extracted reset time (e.g., "3PM") or `None` if not present.
     """
     # Pattern matches: "limit reached.*resets 3PM" or similar
     rate_limit_match = re.search(
@@ -34,13 +35,14 @@ def detect_rate_limit(error_output: str) -> tuple[bool, str | None]:
 
 
 def calculate_wait_time(reset_time_str: str) -> int:
-    """Calculate seconds to wait until reset time.
-
-    Args:
-        reset_time_str: Time string like "3PM" or "11AM"
-
+    """
+    Compute the number of seconds to wait until the given 12-hour reset time, including a 1-minute buffer.
+    
+    Parameters:
+        reset_time_str (str): Reset time in 12-hour format (e.g., "3PM", "11AM"). If the parsed time is earlier than the current time, it is treated as occurring on the next day.
+    
     Returns:
-        Seconds to wait (with 1-minute buffer)
+        int: Non-negative number of seconds to wait until the reset time plus a 1-minute buffer. If the input cannot be parsed, returns 300 (5 minutes) as a fallback.
     """
     try:
         now = datetime.now()
@@ -81,13 +83,14 @@ def calculate_wait_time(reset_time_str: str) -> int:
 
 
 def detect_cli_infrastructure_failure(stderr: str) -> bool:
-    """Detect transient Claude CLI infrastructure failures that should trigger retry.
-
-    Args:
-        stderr: Error output from Claude CLI
-
+    """
+    Detects transient Claude CLI infrastructure failures that should trigger a retry.
+    
+    Parameters:
+        stderr (str): Standard error output from the Claude CLI.
+    
     Returns:
-        True if error indicates retryable infrastructure failure
+        `true` if the stderr indicates a retryable infrastructure failure, `false` otherwise.
     """
     # Node.js module loading errors (e.g., missing yoga.wasm)
     if "Cannot find module" in stderr:

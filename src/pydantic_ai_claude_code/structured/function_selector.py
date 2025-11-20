@@ -17,16 +17,14 @@ logger = logging.getLogger(__name__)
 def build_function_selection_prompt(
     function_tools: list[dict[str, Any]]
 ) -> tuple[str, dict[str, dict[str, Any]]]:
-    """Build prompt for function selection phase.
-
-    Creates a prompt that presents available functions to Claude and
-    asks it to select one or indicate "none" for direct response.
-
-    Args:
-        function_tools: List of function tool definitions
-
+    """
+    Create a user-facing prompt that lists available functions and asks Claude to choose one or 'none'.
+    
+    Parameters:
+        function_tools (list[dict[str, Any]]): List of function tool definitions; each item may include keys like "name", "description", and "parameters_json_schema".
+    
     Returns:
-        Tuple of (prompt_string, available_functions_dict)
+        tuple[str, dict[str, dict[str, Any]]]: A tuple where the first element is the composed prompt string and the second is an `available_functions` mapping from function name to a dict containing its "description" and "parameters".
     """
     available_functions: dict[str, dict[str, Any]] = {}
 
@@ -79,13 +77,14 @@ def build_function_selection_prompt(
 
 
 def parse_function_selection(response_text: str) -> str | None:
-    """Parse function selection from Claude's response.
-
-    Args:
-        response_text: Claude's response text
-
+    """
+    Extract the selected function name from Claude's response.
+    
+    Parameters:
+        response_text (str): Raw text returned by Claude containing a single-line choice in the form `CHOICE: <name>`.
+    
     Returns:
-        Selected function name, "none", or None if parsing fails
+        str | None: The selected function name in lowercase, the literal string `'none'` if "none" was chosen, or `None` if no valid `CHOICE:` line can be parsed.
     """
     # Look for CHOICE: pattern
     match = re.search(r"CHOICE:\s*(\w+)", response_text, re.IGNORECASE)
@@ -105,19 +104,17 @@ def build_argument_collection_prompt(
     parameters_schema: dict[str, Any],
     temp_dir: str,
 ) -> str:
-    """Build prompt for argument collection phase.
-
-    Creates instructions for Claude to extract function arguments
-    from the user's request and write them to the file structure.
-
-    Args:
-        function_name: Name of the selected function
-        function_description: Description of the function
-        parameters_schema: JSON schema for function parameters
-        temp_dir: Temporary directory for output structure
-
+    """
+    Create a prompt that instructs the model to extract the selected function's arguments from the user's request and write them into a structured set of files in the given temporary directory.
+    
+    Parameters:
+        function_name (str): The selected function's name to include in the instructions.
+        function_description (str): Short description of the function to provide context for argument extraction.
+        parameters_schema (dict[str, Any]): JSON Schema describing the expected parameters and their types.
+        temp_dir (str): Path to the temporary directory where the structured output files should be written.
+    
     Returns:
-        Prompt string for argument collection
+        prompt (str): A prompt string directing the model how to extract arguments and produce the structured output.
     """
     # Use the structure converter to build instructions
     return build_structure_instructions(
@@ -134,16 +131,17 @@ def build_retry_prompt(
     temp_dir: str,
     error_message: str,
 ) -> str:
-    """Build retry prompt when argument validation fails.
-
-    Args:
-        original_prompt: The original argument collection prompt
-        schema: Parameter schema
-        temp_dir: New temporary directory for retry
-        error_message: Error message from validation failure
-
+    """
+    Construct a retry prompt that instructs Claude to re-attempt argument collection after a validation error.
+    
+    Parameters:
+        original_prompt (str): The original argument collection prompt that preceded the error.
+        schema (dict[str, Any]): JSON schema describing the function's parameters to validate and collect.
+        temp_dir (str): Path to a temporary directory where the structured output should be written for the retry.
+        error_message (str): Validation error message to present to the model.
+    
     Returns:
-        Retry prompt with error context
+        str: A prompt string containing the error context and updated structure instructions for the retry.
     """
     lines = [
         "# Retry: Argument Collection",

@@ -12,27 +12,22 @@ logger = logging.getLogger(__name__)
 def convert_primitive_value(
     value: str, field_type: str
 ) -> int | float | bool | str | None:
-    """Convert string value to typed primitive.
-
-    Centralized type conversion used throughout the codebase for consistent
-    handling of JSON schema type conversion.
-
-    Args:
-        value: String value to convert
-        field_type: Target type (integer, number, boolean, string)
-
+    """
+    Convert a string to a primitive value according to a JSON Schema type.
+    
+    Supported target types are "integer", "number", "boolean", and "string". For
+    "number", an integer is returned when the input contains no decimal point or
+    exponent; otherwise a float is returned. For "boolean", the values "true",
+    "1", and "yes" (case-insensitive) are interpreted as True; all other values
+    are interpreted as False.
+    
+    Parameters:
+        value (str): The string to convert.
+        field_type (str): Target type; one of "integer", "number", "boolean", or "string".
+    
     Returns:
-        Converted value or None if conversion fails
-
-    Examples:
-        >>> convert_primitive_value("42", "integer")
-        42
-        >>> convert_primitive_value("3.14", "number")
-        3.14
-        >>> convert_primitive_value("true", "boolean")
-        True
-        >>> convert_primitive_value("hello", "string")
-        'hello'
+        int | float | bool | str | None: The converted value, or `None` if conversion
+        fails or `field_type` is not supported.
     """
     try:
         if field_type == "integer":
@@ -53,13 +48,14 @@ def convert_primitive_value(
 
 
 def get_type_description(field_type: str) -> str:
-    """Get human-readable type description.
-
-    Args:
-        field_type: JSON schema type string
-
+    """
+    Provide a human-readable description for a JSON Schema primitive type.
+    
+    Parameters:
+        field_type (str): JSON Schema type name; expected values include "string", "integer", "number", or "boolean".
+    
     Returns:
-        Human-readable description
+        str: A short human-readable description for the given type (defaults to "Value" for unknown types).
     """
     type_map = {
         "string": "Text value",
