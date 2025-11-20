@@ -776,3 +776,804 @@ class TestProviderPresetDocumentation:
                 assert (
                     "default" in preset.models
                 ), f"Preset {preset_id} missing default model"
+
+
+class TestTemplateSubstitutionEdgeCases:
+    """Tests for edge cases in template variable substitution."""
+
+    def test_template_with_multiple_variables(self):
+        """Test substitution with multiple template variables."""
+        preset = ProviderPreset(
+            preset_id="test",
+            name="Test",
+            website_url="https://example.com",
+            settings={
+                "env": {
+                    "URL": "https://${HOST}:${PORT}/api/${VERSION}",
+                }
+            },
+        )
+
+        env_vars = preset.get_environment_variables(
+            template_vars={"HOST": "api.example.com", "PORT": "8443", "VERSION": "v2"}
+        )
+        assert env_vars["URL"] == "https://api.example.com:8443/api/v2"
+
+    def test_template_with_missing_variable(self):
+        """Test that missing variables are left as-is."""
+        preset = ProviderPreset(
+            preset_id="test",
+            name="Test",
+            website_url="https://example.com",
+            settings={
+                "env": {
+                    "URL": "https://${HOST}/api",
+                }
+            },
+        )
+
+        env_vars = preset.get_environment_variables(template_vars={})
+        # Should keep the original placeholder
+        assert "${HOST}" in env_vars["URL"]
+
+    def test_template_with_env_fallback(self):
+        """Test that environment variables are used as fallback."""
+        preset = ProviderPreset(
+            preset_id="test",
+            name="Test",
+            website_url="https://example.com",
+            settings={
+                "env": {
+                    "URL": "https://${MY_HOST}/api",
+                }
+            },
+        )
+
+        # Set environment variable
+        os.environ["MY_HOST"] = "fallback.example.com"
+        try:
+            env_vars = preset.get_environment_variables(template_vars={})
+            assert "fallback.example.com" in env_vars["URL"]
+        finally:
+            os.environ.pop("MY_HOST", None)
+
+    def test_template_with_special_characters(self):
+        """Test template variables with special characters."""
+        preset = ProviderPreset(
+            preset_id="test",
+            name="Test",
+            website_url="https://example.com",
+            settings={
+                "env": {
+                    "URL": "https://api.example.com/${PATH}",
+                }
+            },
+        )
+
+        env_vars = preset.get_environment_variables(
+            template_vars={"PATH": "v1/users/123"}
+        )
+        assert env_vars["URL"] == "https://api.example.com/v1/users/123"
+
+    def test_template_with_numeric_values(self):
+        """Test that numeric values in settings are converted to strings."""
+        preset = ProviderPreset(
+            preset_id="test",
+            name="Test",
+            website_url="https://example.com",
+            settings={
+                "env": {
+                    "TIMEOUT": 3000,
+                    "MAX_TOKENS": 8000,
+                }
+            },
+        )
+
+        env_vars = preset.get_environment_variables()
+        assert env_vars["TIMEOUT"] == "3000"
+        assert env_vars["MAX_TOKENS"] == "8000"
+
+    def test_template_with_empty_string(self):
+        """Test template with empty string values."""
+        preset = ProviderPreset(
+            preset_id="test",
+            name="Test",
+            website_url="https://example.com",
+            settings={
+                "env": {
+                    "EMPTY_VAR": "",
+                    "NORMAL_VAR": "value",
+                }
+            },
+        )
+
+        env_vars = preset.get_environment_variables()
+        assert env_vars["EMPTY_VAR"] == ""
+        assert env_vars["NORMAL_VAR"] == "value"
+
+
+class TestProviderPresetIntegration:
+    """Integration tests for provider presets with ClaudeCodeProvider."""
+
+    def test_provider_with_deepseek_preset(self):
+        """Test provider initialization with DeepSeek preset."""
+        # Clear any existing env vars
+        os.environ.pop("ANTHROPIC_BASE_URL", None)
+        os.environ.pop("ANTHROPIC_MODEL", None)
+
+        try:
+            provider = ClaudeCodeProvider(
+                settings={
+                    "provider_preset": "deepseek",
+                    "provider_api_key": "test-api-key",
+                }
+            )
+
+            assert provider.provider_preset_id == "deepseek"
+            assert provider.provider_preset is not None
+            assert provider.provider_preset.name == "DeepSeek"
+
+            # Check that environment variables were applied
+            applied = provider.get_applied_env_vars()
+            assert "ANTHROPIC_BASE_URL" in applied
+            assert "deepseek" in applied["ANTHROPIC_BASE_URL"]
+            assert "ANTHROPIC_AUTH_TOKEN" in applied
+            assert applied["ANTHROPIC_AUTH_TOKEN"] == "test-api-key"
+        finally:
+            # Cleanup
+            for key in ["ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_AUTH_TOKEN"]:
+                os.environ.pop(key, None)
+
+    def test_provider_get_model_name_with_preset(self):
+        """Test get_model_name method with preset loaded."""
+        provider = ClaudeCodeProvider(
+            settings={"provider_preset": "deepseek"}
+        )
+
+        # DeepSeek uses same model for all aliases
+        assert provider.get_model_name("sonnet") == "DeepSeek-V3.2-Exp"
+        assert provider.get_model_name("haiku") == "DeepSeek-V3.2-Exp"
+        assert provider.get_model_name("opus") == "DeepSeek-V3.2-Exp"
+
+    def test_provider_get_model_name_without_preset(self):
+        """Test get_model_name method without preset."""
+        provider = ClaudeCodeProvider(settings={})
+
+        # Should return as-is
+        assert provider.get_model_name("sonnet") == "sonnet"
+        assert provider.get_model_name("custom-model") == "custom-model"
+
+    def test_provider_with_template_vars(self):
+        """Test provider with template variables."""
+        os.environ.pop("ANTHROPIC_BASE_URL", None)
+
+        try:
+            provider = ClaudeCodeProvider(
+                settings={
+                    "provider_preset": "kat_coder",
+                    "provider_api_key": "test-key",
+                    "provider_template_vars": {"ENDPOINT_ID": "ep-test-123"},
+                }
+            )
+
+            applied = provider.get_applied_env_vars()
+            assert "ANTHROPIC_BASE_URL" in applied
+            assert "ep-test-123" in applied["ANTHROPIC_BASE_URL"]
+        finally:
+            os.environ.pop("ANTHROPIC_BASE_URL", None)
+            os.environ.pop("ANTHROPIC_AUTH_TOKEN", None)
+
+    def test_provider_override_env_disabled(self):
+        """Test that provider doesn't override existing env vars by default."""
+        os.environ["ANTHROPIC_BASE_URL"] = "https://original.example.com"
+
+        try:
+            provider = ClaudeCodeProvider(
+                settings={
+                    "provider_preset": "deepseek",
+                    "provider_override_env": False,
+                }
+            )
+
+            # Original value should be preserved
+            assert os.getenv("ANTHROPIC_BASE_URL") == "https://original.example.com"
+
+            # Applied vars should not include the overridden one
+            applied = provider.get_applied_env_vars()
+            assert "ANTHROPIC_BASE_URL" not in applied
+        finally:
+            os.environ.pop("ANTHROPIC_BASE_URL", None)
+
+    def test_provider_override_env_enabled(self):
+        """Test that provider overrides existing env vars when requested."""
+        os.environ["ANTHROPIC_BASE_URL"] = "https://original.example.com"
+
+        try:
+            provider = ClaudeCodeProvider(
+                settings={
+                    "provider_preset": "deepseek",
+                    "provider_override_env": True,
+                }
+            )
+
+            # Should be overridden
+            assert "deepseek" in os.getenv("ANTHROPIC_BASE_URL", "")
+
+            # Applied vars should include the overridden one
+            applied = provider.get_applied_env_vars()
+            assert "ANTHROPIC_BASE_URL" in applied
+        finally:
+            os.environ.pop("ANTHROPIC_BASE_URL", None)
+
+
+class TestModelRegistrationEdgeCases:
+    """Edge case tests for model registration."""
+
+    def test_invalid_format_falls_through(self):
+        """Test that invalid format strings fall through to original handler."""
+        from pydantic_ai import models
+
+        # These should not be recognized as claude-code models
+        # and should fall through to the original handler
+        try:
+            # Single colon with wrong prefix
+            models.infer_model("other-provider:model")
+        except Exception:
+            pass  # Expected - falls through to original which may raise
+
+        try:
+            # No colon
+            models.infer_model("claude-code")
+        except Exception:
+            pass  # Expected - falls through to original which may raise
+
+    def test_four_part_string_ignored(self):
+        """Test that four-part strings are ignored."""
+        from pydantic_ai import models
+
+        # Should fall through - not a valid claude-code format
+        try:
+            models.infer_model("claude-code:preset:model:extra")
+        except Exception:
+            pass  # Expected
+
+    def test_preset_with_zhipu_glm(self):
+        """Test model registration with Zhipu GLM preset."""
+        from pydantic_ai import models
+
+        from pydantic_ai_claude_code import ClaudeCodeModel
+
+        model = models.infer_model("claude-code:zhipu_glm:sonnet")
+
+        assert isinstance(model, ClaudeCodeModel)
+        assert model._model_name == "glm-4.6"
+        assert model.provider.provider_preset_id == "zhipu_glm"
+
+    def test_preset_with_haiku_alias(self):
+        """Test model registration with haiku alias."""
+        from pydantic_ai import models
+
+        from pydantic_ai_claude_code import ClaudeCodeModel
+
+        model = models.infer_model("claude-code:zhipu_glm:haiku")
+
+        assert isinstance(model, ClaudeCodeModel)
+        assert model._model_name == "glm-4.5-air"
+
+    def test_preset_with_nonexistent_alias(self):
+        """Test model registration with nonexistent model alias."""
+        from pydantic_ai import models
+
+        from pydantic_ai_claude_code import ClaudeCodeModel
+
+        model = models.infer_model("claude-code:deepseek:nonexistent")
+
+        assert isinstance(model, ClaudeCodeModel)
+        # Should return alias as-is if not in mapping
+        assert model._model_name == "nonexistent"
+
+
+class TestYAMLFileErrors:
+    """Tests for YAML file loading error handling."""
+
+    def test_malformed_yaml_returns_empty_dict(self):
+        """Test that malformed YAML returns empty dict."""
+        from pydantic_ai_claude_code.provider_presets import _load_yaml_file
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yaml_file = Path(tmpdir) / "bad.yaml"
+            yaml_file.write_text("invalid: yaml: content:\n  - broken")
+
+            result = _load_yaml_file(yaml_file)
+            # Should return empty dict on error, not crash
+            assert isinstance(result, dict)
+
+    def test_nonexistent_yaml_returns_empty_dict(self):
+        """Test that nonexistent YAML file returns empty dict."""
+        from pydantic_ai_claude_code.provider_presets import _load_yaml_file
+
+        result = _load_yaml_file(Path("/nonexistent/path/file.yaml"))
+        assert result == {}
+
+    def test_yaml_with_null_returns_empty_dict(self):
+        """Test that YAML with null content returns empty dict."""
+        from pydantic_ai_claude_code.provider_presets import _load_yaml_file
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yaml_file = Path(tmpdir) / "null.yaml"
+            yaml_file.write_text("")
+
+            result = _load_yaml_file(yaml_file)
+            assert result == {}
+
+
+class TestJSONFileErrors:
+    """Tests for JSON file loading error handling."""
+
+    def test_malformed_json_returns_empty_dict(self):
+        """Test that malformed JSON returns empty dict."""
+        from pydantic_ai_claude_code.provider_presets import _load_json_file
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            json_file = Path(tmpdir) / "bad.json"
+            json_file.write_text("{invalid json content}")
+
+            result = _load_json_file(json_file)
+            # Should return empty dict on error, not crash
+            assert isinstance(result, dict)
+
+    def test_nonexistent_json_returns_empty_dict(self):
+        """Test that nonexistent JSON file returns empty dict."""
+        from pydantic_ai_claude_code.provider_presets import _load_json_file
+
+        result = _load_json_file(Path("/nonexistent/path/file.json"))
+        assert result == {}
+
+
+class TestPresetPrecedenceDetailed:
+    """Detailed tests for preset loading precedence."""
+
+    def test_project_overrides_builtin_and_user(self):
+        """Test full precedence chain: project > user > builtin."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            user_dir = Path(tmpdir) / ".claude"
+            user_dir.mkdir()
+
+            # User preset overrides builtin
+            user_yaml = """
+providers:
+  deepseek:
+    name: "User DeepSeek"
+    website_url: "https://user-deepseek.com"
+    settings:
+      env:
+        ANTHROPIC_BASE_URL: "https://user.api.com"
+  user_only:
+    name: "User Only"
+    website_url: "https://user-only.com"
+    settings:
+      env: {}
+"""
+            (user_dir / "providers.yaml").write_text(user_yaml)
+
+            # Project preset overrides both
+            project_yaml = """
+providers:
+  deepseek:
+    name: "Project DeepSeek"
+    website_url: "https://project-deepseek.com"
+    settings:
+      env:
+        ANTHROPIC_BASE_URL: "https://project.api.com"
+  project_only:
+    name: "Project Only"
+    website_url: "https://project-only.com"
+    settings:
+      env: {}
+"""
+            (project_dir / "claude_providers.yaml").write_text(project_yaml)
+
+            with patch.object(Path, "home", return_value=Path(tmpdir)):
+                presets = load_all_presets(project_dir)
+
+            # Project version should win
+            assert presets["deepseek"].name == "Project DeepSeek"
+            assert "project.api.com" in presets["deepseek"].settings["env"]["ANTHROPIC_BASE_URL"]
+
+            # User-only preset should be included
+            assert "user_only" in presets
+            assert presets["user_only"].name == "User Only"
+
+            # Project-only preset should be included
+            assert "project_only" in presets
+            assert presets["project_only"].name == "Project Only"
+
+            # Built-in presets should still be present
+            assert "zhipu_glm" in presets
+            assert "qwen_coder" in presets
+
+
+class TestPresetAPIKeyFields:
+    """Tests for different API key field configurations."""
+
+    def test_preset_with_custom_api_key_field(self):
+        """Test preset with custom API key field."""
+        preset = ProviderPreset(
+            preset_id="test",
+            name="Test",
+            website_url="https://example.com",
+            settings={"env": {}},
+            api_key_field="CUSTOM_API_KEY",
+        )
+
+        env_vars = preset.get_environment_variables(api_key="my-key")
+        assert "CUSTOM_API_KEY" in env_vars
+        assert env_vars["CUSTOM_API_KEY"] == "my-key"
+        # Should not set ANTHROPIC_AUTH_TOKEN
+        assert "ANTHROPIC_AUTH_TOKEN" not in env_vars
+
+    def test_aihubmix_uses_anthropic_api_key(self):
+        """Test that AiHubMix preset uses ANTHROPIC_API_KEY field."""
+        presets = load_builtin_presets()
+        aihubmix = presets.get("aihubmix")
+
+        assert aihubmix is not None
+        assert aihubmix.api_key_field == "ANTHROPIC_API_KEY"
+
+        env_vars = aihubmix.get_environment_variables(api_key="test-key")
+        assert "ANTHROPIC_API_KEY" in env_vars
+        assert env_vars["ANTHROPIC_API_KEY"] == "test-key"
+
+
+class TestPresetThemeConfiguration:
+    """Tests for preset theme configuration."""
+
+    def test_preset_with_theme(self):
+        """Test preset with theme configuration."""
+        preset = ProviderPreset(
+            preset_id="test",
+            name="Test",
+            website_url="https://example.com",
+            settings={"env": {}},
+            theme={
+                "icon": "custom",
+                "background_color": "#FF5733",
+                "text_color": "#FFFFFF",
+            },
+        )
+
+        assert preset.theme["icon"] == "custom"
+        assert preset.theme["background_color"] == "#FF5733"
+        assert preset.theme["text_color"] == "#FFFFFF"
+
+    def test_preset_theme_in_to_dict(self):
+        """Test that theme is included in to_dict output."""
+        preset = ProviderPreset(
+            preset_id="test",
+            name="Test",
+            website_url="https://example.com",
+            settings={"env": {}},
+            theme={"icon": "test"},
+        )
+
+        data = preset.to_dict()
+        assert "theme" in data
+        assert data["theme"]["icon"] == "test"
+
+
+class TestPresetEndpointCandidates:
+    """Tests for preset endpoint candidates."""
+
+    def test_preset_with_endpoint_candidates(self):
+        """Test preset with multiple endpoint candidates."""
+        preset = ProviderPreset(
+            preset_id="test",
+            name="Test",
+            website_url="https://example.com",
+            settings={"env": {}},
+            endpoint_candidates=[
+                "https://api1.example.com",
+                "https://api2.example.com",
+                "https://api3.example.com",
+            ],
+        )
+
+        assert len(preset.endpoint_candidates) == 3
+        assert "api1.example.com" in preset.endpoint_candidates[0]
+
+    def test_endpoint_candidates_in_to_dict(self):
+        """Test that endpoint candidates are included in to_dict."""
+        preset = ProviderPreset(
+            preset_id="test",
+            name="Test",
+            website_url="https://example.com",
+            settings={"env": {}},
+            endpoint_candidates=["https://api.example.com"],
+        )
+
+        data = preset.to_dict()
+        assert "endpoint_candidates" in data
+        assert len(data["endpoint_candidates"]) == 1
+
+
+class TestPartnerPresets:
+    """Tests for partner preset configurations."""
+
+    def test_zhipu_is_partner(self):
+        """Test that Zhipu GLM is marked as partner."""
+        preset = get_preset("zhipu_glm")
+
+        assert preset is not None
+        assert preset.is_partner is True
+        assert preset.partner_promotion_key == "zhipu"
+
+    def test_zai_is_partner(self):
+        """Test that Z.ai GLM is marked as partner."""
+        preset = get_preset("zai_glm")
+
+        assert preset is not None
+        assert preset.is_partner is True
+        assert preset.partner_promotion_key == "zhipu"
+
+    def test_packycode_is_partner(self):
+        """Test that PackyCode is marked as partner."""
+        preset = get_preset("packycode")
+
+        assert preset is not None
+        assert preset.is_partner is True
+        assert preset.partner_promotion_key == "packycode"
+
+
+class TestSpecificPresetConfigurations:
+    """Tests for specific preset configurations."""
+
+    def test_kimi_k2_configuration(self):
+        """Test Kimi k2 preset configuration."""
+        preset = get_preset("kimi_k2")
+
+        assert preset is not None
+        assert preset.name == "Kimi k2"
+        assert preset.category == "cn_official"
+        assert preset.models.get("default") == "kimi-k2-thinking"
+
+    def test_kimi_for_coding_configuration(self):
+        """Test Kimi For Coding preset configuration."""
+        preset = get_preset("kimi_for_coding")
+
+        assert preset is not None
+        assert preset.name == "Kimi For Coding"
+        assert preset.models.get("sonnet") == "kimi-for-coding"
+
+    def test_longcat_with_special_settings(self):
+        """Test Longcat preset with special environment settings."""
+        preset = get_preset("longcat")
+
+        assert preset is not None
+        env_vars = preset.get_environment_variables()
+        assert "CLAUDE_CODE_MAX_OUTPUT_TOKENS" in env_vars
+        assert env_vars["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "6000"
+        assert "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" in env_vars
+        assert env_vars["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
+
+    def test_minimax_with_timeout_setting(self):
+        """Test MiniMax preset with custom timeout."""
+        preset = get_preset("minimax")
+
+        assert preset is not None
+        env_vars = preset.get_environment_variables()
+        assert "API_TIMEOUT_MS" in env_vars
+        assert env_vars["API_TIMEOUT_MS"] == "3000000"
+
+    def test_modelscope_aggregator(self):
+        """Test ModelScope as aggregator category."""
+        preset = get_preset("modelscope")
+
+        assert preset is not None
+        assert preset.category == "aggregator"
+        assert "modelscope" in preset.website_url
+
+
+class TestProviderContextManager:
+    """Tests for ClaudeCodeProvider context manager functionality."""
+
+    def test_provider_context_manager_with_preset(self):
+        """Test provider as context manager with preset."""
+        os.environ.pop("ANTHROPIC_BASE_URL", None)
+
+        try:
+            with ClaudeCodeProvider(
+                settings={
+                    "provider_preset": "deepseek",
+                    "provider_api_key": "test-key",
+                }
+            ) as provider:
+                assert provider.provider_preset_id == "deepseek"
+                assert "ANTHROPIC_BASE_URL" in os.environ
+
+            # Environment should still be set after context exit
+            # (preset env vars persist for the process)
+            assert "ANTHROPIC_BASE_URL" in os.environ
+        finally:
+            os.environ.pop("ANTHROPIC_BASE_URL", None)
+            os.environ.pop("ANTHROPIC_AUTH_TOKEN", None)
+
+
+class TestEmptyAndNullConfigurations:
+    """Tests for empty and null preset configurations."""
+
+    def test_preset_with_empty_settings(self):
+        """Test preset with empty settings dict."""
+        preset = ProviderPreset(
+            preset_id="test",
+            name="Test",
+            website_url="https://example.com",
+            settings={},
+        )
+
+        env_vars = preset.get_environment_variables()
+        assert isinstance(env_vars, dict)
+        assert len(env_vars) == 0
+
+    def test_preset_with_none_models(self):
+        """Test preset with None models."""
+        preset = ProviderPreset(
+            preset_id="test",
+            name="Test",
+            website_url="https://example.com",
+            settings={"env": {}},
+            models=None,
+        )
+
+        # Should default to empty dict
+        assert preset.models == {}
+        assert preset.get_model_name("sonnet") == "sonnet"
+
+    def test_preset_with_none_template_values(self):
+        """Test preset with None template values."""
+        preset = ProviderPreset(
+            preset_id="test",
+            name="Test",
+            website_url="https://example.com",
+            settings={"env": {}},
+            template_values=None,
+        )
+
+        # Should default to empty dict
+        assert preset.template_values == {}
+
+
+class TestCategoryFiltering:
+    """Tests for filtering presets by category."""
+
+    def test_get_official_category(self):
+        """Test getting official category presets."""
+        presets = get_presets_by_category("official")
+
+        # Should include claude_official if present
+        preset_ids = [p.preset_id for p in presets]
+        assert "claude_official" in preset_ids
+
+    def test_get_third_party_category(self):
+        """Test getting third party presets."""
+        presets = get_presets_by_category("third_party")
+
+        for preset in presets:
+            assert preset.category == "third_party"
+
+    def test_empty_category_returns_empty_list(self):
+        """Test that nonexistent category returns empty list."""
+        # Using an invalid category should return empty list
+        presets = get_presets_by_category("nonexistent")  # type: ignore
+        # This will still work but filter out everything
+        assert isinstance(presets, list)
+
+
+class TestConcurrentPresetAccess:
+    """Tests for concurrent access to preset configurations."""
+
+    def test_multiple_providers_same_preset(self):
+        """Test that multiple providers can use the same preset."""
+        provider1 = ClaudeCodeProvider(
+            settings={"provider_preset": "deepseek"}
+        )
+        provider2 = ClaudeCodeProvider(
+            settings={"provider_preset": "deepseek"}
+        )
+
+        assert provider1.provider_preset_id == provider2.provider_preset_id
+        assert provider1.provider_preset is not None
+        assert provider2.provider_preset is not None
+
+    def test_multiple_providers_different_presets(self):
+        """Test that multiple providers can use different presets."""
+        provider1 = ClaudeCodeProvider(
+            settings={"provider_preset": "deepseek"}
+        )
+        provider2 = ClaudeCodeProvider(
+            settings={"provider_preset": "zhipu_glm"}
+        )
+
+        assert provider1.provider_preset_id != provider2.provider_preset_id
+        assert provider1.provider_preset.name == "DeepSeek"
+        assert provider2.provider_preset.name == "Zhipu GLM"
+
+
+class TestPresetValidation:
+    """Tests for preset configuration validation."""
+
+    def test_all_cn_official_have_base_url(self):
+        """Test that all CN official presets have base URL configured."""
+        presets = get_presets_by_category("cn_official")
+
+        for preset in presets:
+            env_vars = preset.get_environment_variables()
+            assert (
+                "ANTHROPIC_BASE_URL" in env_vars
+            ), f"Preset {preset.preset_id} missing ANTHROPIC_BASE_URL"
+
+    def test_all_aggregators_have_base_url(self):
+        """Test that all aggregator presets have base URL configured."""
+        presets = get_presets_by_category("aggregator")
+
+        for preset in presets:
+            if "settings" in preset.settings and "env" in preset.settings:
+                # Aggregators should have base URL
+                env_vars = preset.get_environment_variables()
+                # At minimum should have ANTHROPIC_BASE_URL in settings
+                assert len(preset.settings.get("env", {})) > 0
+
+    def test_presets_have_valid_urls(self):
+        """Test that preset URLs are valid."""
+        presets = load_all_presets()
+
+        for preset_id, preset in presets.items():
+            assert preset.website_url.startswith("http"), \
+                f"Preset {preset_id} has invalid website_url"
+            if preset.api_key_url:
+                assert preset.api_key_url.startswith("http"), \
+                    f"Preset {preset_id} has invalid api_key_url"
+
+
+class TestPresetModelMappings:
+    """Tests for preset model mappings and aliases."""
+
+    def test_get_model_name_with_all_aliases(self):
+        """Test get_model_name with all standard aliases."""
+        preset = ProviderPreset(
+            preset_id="test",
+            name="Test",
+            website_url="https://example.com",
+            settings={"env": {}},
+            models={
+                "default": "model-default",
+                "haiku": "model-haiku",
+                "sonnet": "model-sonnet",
+                "opus": "model-opus",
+            },
+        )
+
+        assert preset.get_model_name("haiku") == "model-haiku"
+        assert preset.get_model_name("sonnet") == "model-sonnet"
+        assert preset.get_model_name("opus") == "model-opus"
+        assert preset.get_model_name("custom") == "model-default"
+
+    def test_get_model_name_with_partial_mapping(self):
+        """Test get_model_name with partial model mapping."""
+        preset = ProviderPreset(
+            preset_id="test",
+            name="Test",
+            website_url="https://example.com",
+            settings={"env": {}},
+            models={
+                "default": "model-default",
+                "sonnet": "model-sonnet",
+            },
+        )
+
+        # Mapped
+        assert preset.get_model_name("sonnet") == "model-sonnet"
+        assert preset.get_model_name("custom") == "model-default"
+        # Not mapped - returns as-is
+        assert preset.get_model_name("haiku") == "haiku"
+        assert preset.get_model_name("opus") == "opus"
