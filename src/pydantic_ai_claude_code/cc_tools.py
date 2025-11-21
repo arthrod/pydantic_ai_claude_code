@@ -8,6 +8,7 @@ while leveraging SDK capabilities for permission management.
 from typing import Any, Callable, Awaitable, Optional
 from dataclasses import dataclass, field
 from datetime import datetime
+import inspect
 import logging
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,7 @@ class ToolDefinition:
     name: str
     description: str
     parameters_schema: dict[str, Any]
-    handler: Optional[Callable[..., Awaitable[Any]]] = None
+    handler: Optional[Callable[..., Any]] = None  # Supports both sync and async callables
     permission_mode: str = "ask"  # ask, allow, deny
 
     def to_sdk_format(self) -> dict[str, Any]:
@@ -285,7 +286,11 @@ class CCTools:
                 return float(value)
             elif param_type == "boolean":
                 if isinstance(value, str):
-                    return value.lower() in ("true", "1", "yes")
+                    lowered = value.strip().lower()
+                    if lowered in ("true", "1", "yes", "y"):
+                        return True
+                    if lowered in ("false", "0", "no", "n"):
+                        return False
                 return bool(value)
             elif param_type == "array" and not isinstance(value, list):
                 return [value]
@@ -373,9 +378,13 @@ class CCTools:
 
         logger.debug("Executing tool: %s with args: %s", tool_name, args)
 
-        # Execute handler
+        # Execute handler (supports both async and sync callables)
         try:
-            result = await tool.handler(**args)
+            call_result = tool.handler(**args)
+            if inspect.isawaitable(call_result):
+                result = await call_result
+            else:
+                result = call_result
             history_entry["result"] = result
             history_entry["success"] = True
             return result

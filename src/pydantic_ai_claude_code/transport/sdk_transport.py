@@ -99,19 +99,21 @@ class EnhancedCLITransport:
             Initializes internal state:
               - self._working_directory is set to None.
               - self._sandbox_env is initialized as an empty dict.
+              - self._sandbox_config_path is set to None.
         """
         self.prompt = prompt
         self.settings = settings or {}
         self._working_directory: str | None = None
         self._sandbox_env: dict[str, str] = {}
+        self._sandbox_config_path: str | None = None
 
     async def execute(self) -> ClaudeJSONResponse:
         """
         Run the enhanced Claude CLI end-to-end, handling working directory setup, sandboxing, rate-limit retries, infrastructure backoff, and debug saving.
-        
+
         Returns:
             ClaudeJSONResponse: Parsed Claude JSON response.
-        
+
         Raises:
             ClaudeOAuthError: If OAuth reauthentication is required.
             RuntimeError: If the CLI fails after the maximum retry attempts or encounters an unrecoverable error.
@@ -125,49 +127,58 @@ class EnhancedCLITransport:
         # Build command
         cmd = self._build_command()
 
-        # Execute with retries
-        for attempt in range(MAX_CLI_RETRIES):
-            try:
-                response, should_retry_infra = await self._try_execution_with_retry(
-                    cmd, cwd, timeout_seconds, retry_enabled
-                )
-
-                if response:
-                    save_response_debug(response, self.settings)
-                    return response
-
-                # Infrastructure failure
-                if should_retry_infra and attempt < MAX_CLI_RETRIES - 1:
-                    backoff_seconds = RETRY_BACKOFF_BASE ** attempt
-                    logger.warning(
-                        "CLI infrastructure failure (attempt %d/%d). "
-                        "Retrying in %d seconds...",
-                        attempt + 1,
-                        MAX_CLI_RETRIES,
-                        backoff_seconds,
+        try:
+            # Execute with retries
+            for attempt in range(MAX_CLI_RETRIES):
+                try:
+                    response, should_retry_infra = await self._try_execution_with_retry(
+                        cmd, cwd, timeout_seconds, retry_enabled
                     )
-                    await asyncio.sleep(backoff_seconds)
-                    continue
-                elif should_retry_infra:
-                    raise RuntimeError("Claude CLI infrastructure failure persisted")
 
-            except RuntimeError as e:
-                if attempt >= MAX_CLI_RETRIES - 1:
+                    if response:
+                        save_response_debug(response, self.settings)
+                        return response
+
+                    # Infrastructure failure
+                    if should_retry_infra and attempt < MAX_CLI_RETRIES - 1:
+                        backoff_seconds = RETRY_BACKOFF_BASE ** attempt
+                        logger.warning(
+                            "CLI infrastructure failure (attempt %d/%d). "
+                            "Retrying in %d seconds...",
+                            attempt + 1,
+                            MAX_CLI_RETRIES,
+                            backoff_seconds,
+                        )
+                        await asyncio.sleep(backoff_seconds)
+                        continue
+                    elif should_retry_infra:
+                        raise RuntimeError("Claude CLI infrastructure failure persisted")
+
+                except RuntimeError as e:
+                    if attempt >= MAX_CLI_RETRIES - 1:
+                        raise
+                    if detect_cli_infrastructure_failure(str(e)):
+                        backoff_seconds = RETRY_BACKOFF_BASE ** attempt
+                        logger.warning(
+                            "CLI infrastructure failure in execution (attempt %d/%d). "
+                            "Retrying in %d seconds...",
+                            attempt + 1,
+                            MAX_CLI_RETRIES,
+                            backoff_seconds,
+                        )
+                        await asyncio.sleep(backoff_seconds)
+                        continue
                     raise
-                if detect_cli_infrastructure_failure(str(e)):
-                    backoff_seconds = RETRY_BACKOFF_BASE ** attempt
-                    logger.warning(
-                        "CLI infrastructure failure in execution (attempt %d/%d). "
-                        "Retrying in %d seconds...",
-                        attempt + 1,
-                        MAX_CLI_RETRIES,
-                        backoff_seconds,
-                    )
-                    await asyncio.sleep(backoff_seconds)
-                    continue
-                raise
 
-        raise RuntimeError("Claude CLI failed after maximum retry attempts")
+            raise RuntimeError("Claude CLI failed after maximum retry attempts")
+        finally:
+            # Clean up sandbox config file if it was created
+            if self._sandbox_config_path:
+                try:
+                    os.unlink(self._sandbox_config_path)
+                    logger.debug("Cleaned up sandbox config file: %s", self._sandbox_config_path)
+                except OSError:
+                    pass  # Best effort cleanup
 
     def _setup_working_directory(self) -> str:
         """
@@ -273,7 +284,7 @@ class EnhancedCLITransport:
 
         # Wrap with sandbox if enabled
         if self.settings.get("use_sandbox_runtime"):
-            cmd, self._sandbox_env = wrap_command_with_sandbox(cmd, self.settings)
+            cmd, self._sandbox_env, self._sandbox_config_path = wrap_command_with_sandbox(cmd, self.settings)
             self.settings["__sandbox_env"] = self._sandbox_env
 
         return cmd

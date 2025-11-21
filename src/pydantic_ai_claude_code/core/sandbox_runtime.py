@@ -87,16 +87,19 @@ def build_sandbox_config() -> dict[str, Any]:
 def wrap_command_with_sandbox(
     cmd: list[str],
     settings: dict[str, Any] | None = None
-) -> tuple[list[str], dict[str, str]]:
+) -> tuple[list[str], dict[str, str], str]:
     """
     Wrap a Claude CLI command so it runs under the sandbox-runtime with a sandboxed configuration and environment.
-    
+
     Parameters:
         cmd (list[str]): The original Claude CLI command and its arguments.
         settings (dict[str, Any] | None): Optional settings; if it contains `sandbox_runtime_path` that path is used to locate the sandbox runtime.
-    
+
     Returns:
-        tuple[list[str], dict[str, str]]: A tuple where the first element is the wrapped command (invoking the sandbox runtime with a temporary settings file and the original command) and the second element is an environment dictionary for the sandbox (includes `IS_SANDBOX` and `CLAUDE_CONFIG_DIR`).
+        tuple[list[str], dict[str, str], str]: A tuple containing:
+            - wrapped_cmd: The wrapped command invoking the sandbox runtime
+            - sandbox_env: Environment dictionary for the sandbox (includes `IS_SANDBOX` and `CLAUDE_CONFIG_DIR`)
+            - config_path: Path to the temporary config file (caller must clean up after process exits)
     """
     settings = settings or {}
     srt_path = resolve_sandbox_runtime_path(settings)
@@ -111,7 +114,7 @@ def wrap_command_with_sandbox(
             json.dump(config, f)
 
         # Redirect Claude config/debug to /tmp to avoid ~/.claude/ writes
-        claude_config_dir = "/tmp/claude_sandbox_config"
+        claude_config_dir = "/tmp/claude_sandbox_config"  # noqa: S108
         os.makedirs(claude_config_dir, exist_ok=True)
 
         # Copy OAuth credentials from ~/.claude/ to sandbox config dir
@@ -129,11 +132,7 @@ def wrap_command_with_sandbox(
             logger.debug("Copied settings to sandbox config dir")
 
         # Build wrapper: srt -- <claude command>
-        wrapped_cmd = [
-            srt_path,
-            "--settings", config_path,
-            "--",
-        ] + cmd
+        wrapped_cmd = [srt_path, "--settings", config_path, "--", *cmd]
 
         # Environment variables for sandbox
         sandbox_env = {
@@ -144,12 +143,12 @@ def wrap_command_with_sandbox(
         logger.info("Wrapped Claude command with sandbox (IS_SANDBOX=1, CLAUDE_CONFIG_DIR=%s)", claude_config_dir)
         logger.debug("Full sandboxed command: %s", " ".join(wrapped_cmd))
 
-        return wrapped_cmd, sandbox_env
+        return wrapped_cmd, sandbox_env, config_path
 
     except Exception:
         # Clean up config file on error
         try:
             os.unlink(config_path)
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
         raise
