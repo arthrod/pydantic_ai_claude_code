@@ -562,6 +562,11 @@ class TestClaudeCodeProviderWithPresets:
         model_name = provider.get_model_name("sonnet")
         assert model_name == "DeepSeek-V3.2-Exp"
 
+        # Unknown alias should be returned unchanged
+        unknown_alias = "unknown_model"
+        mapped_name = provider.get_model_name(unknown_alias)
+        assert mapped_name == unknown_alias
+
     def test_provider_with_template_vars(self):
         """Test provider with template variables."""
         os.environ.pop("ANTHROPIC_BASE_URL", None)
