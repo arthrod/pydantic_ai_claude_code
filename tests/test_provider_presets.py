@@ -449,7 +449,7 @@ class TestApplyProviderEnvironment:
         os.environ.pop("ANTHROPIC_AUTH_TOKEN", None)
 
         try:
-            applied = apply_provider_environment(preset, api_key="my-api-key")
+            apply_provider_environment(preset, api_key="my-api-key")
 
             assert os.getenv("ANTHROPIC_AUTH_TOKEN") == "my-api-key"
         finally:
@@ -1522,11 +1522,12 @@ class TestPresetValidation:
         presets = get_presets_by_category("aggregator")
 
         for preset in presets:
-            if "settings" in preset.settings and "env" in preset.settings:
-                # Aggregators should have base URL
-                env_vars = preset.get_environment_variables()
-                # At minimum should have ANTHROPIC_BASE_URL in settings
-                assert len(preset.settings.get("env", {})) > 0
+            # Aggregators should have base URL
+            env_vars = preset.get_environment_variables()
+            # At minimum should have ANTHROPIC_BASE_URL in settings
+            assert len(preset.settings.get("env", {})) > 0
+            assert "ANTHROPIC_BASE_URL" in env_vars, \
+                f"Aggregator preset {preset.preset_id} missing ANTHROPIC_BASE_URL"
 
     def test_presets_have_valid_urls(self):
         """Test that preset URLs are valid."""

@@ -28,7 +28,7 @@ class ClaudeCodeProvider:
     def __init__(self, settings: ClaudeCodeSettings | None = None):
         """
         Initialize the Claude Code provider and apply configuration and provider preset environment variables.
-        
+
         Parameters:
             settings (ClaudeCodeSettings | None): Optional configuration mapping. Recognized keys include common runtime settings (working_directory, allowed_tools, disallowed_tools, append_system_prompt, permission_mode, model, fallback_model, verbose, timeout_seconds, claude_cli_path, extra_cli_args) and flags controlling behavior:
                 - use_temp_workspace: create a temporary working directory when no working_directory is provided
@@ -39,7 +39,13 @@ class ClaudeCodeProvider:
                 - provider_api_key: API key to supply to the provider preset
                 - provider_template_vars: template variable values to apply to the preset
                 - provider_override_env: if true, override existing environment variables when applying the preset
-        
+
+        Warning:
+            If a provider_preset is specified, this constructor modifies the global ``os.environ``
+            dictionary by setting environment variables from the preset (e.g., ANTHROPIC_BASE_URL).
+            These changes persist for the lifetime of the process and may affect other code.
+            Use ``get_applied_env_vars()`` to see which variables were set.
+
         Notes:
             If a provider_preset is specified and found, its environment variables are applied and stored internally; if not found, a warning is logged.
         """

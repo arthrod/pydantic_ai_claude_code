@@ -62,6 +62,14 @@ def register_claude_code_model() -> None:
                             # Format: claude-code:model_name
                             # e.g., claude-code:sonnet, claude-code:custom
                             model_name = parts[1]
+
+                            # Validate non-empty model name
+                            if not model_name:
+                                raise ValueError(
+                                    f"Invalid model string '{model}': model name cannot be empty. "
+                                    "Use format 'claude-code:model_name'"
+                                )
+
                             logger.debug(
                                 "Creating ClaudeCodeModel for model: %s", model_name
                             )
@@ -72,6 +80,18 @@ def register_claude_code_model() -> None:
                             # e.g., claude-code:deepseek:sonnet
                             preset_id = parts[1]
                             model_alias = parts[2]
+
+                            # Validate non-empty components
+                            if not preset_id:
+                                raise ValueError(
+                                    f"Invalid model string '{model}': preset_id cannot be empty. "
+                                    "Use format 'claude-code:preset_id:model_alias'"
+                                )
+                            if not model_alias:
+                                raise ValueError(
+                                    f"Invalid model string '{model}': model_alias cannot be empty. "
+                                    "Use format 'claude-code:preset_id:model_alias'"
+                                )
 
                             # Create provider with preset
                             provider = ClaudeCodeProvider(settings={

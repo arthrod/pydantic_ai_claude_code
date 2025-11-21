@@ -150,9 +150,9 @@ class ProviderPreset:
             var_name = match.group(1)
             if var_name in template_vars:
                 return template_vars[var_name]
-            # Check environment as fallback
+            # Check environment as fallback (empty string is valid)
             env_value = os.getenv(var_name)
-            if env_value:
+            if env_value is not None:
                 return env_value
             # Return original if not found
             logger.warning(
@@ -192,25 +192,25 @@ class ProviderPreset:
 def _load_yaml_file(file_path: Path) -> dict[str, Any]:
     """
     Load and parse a YAML file into a dictionary.
-    
+
     Parses the YAML at file_path and returns the resulting mapping. If the file does not exist or parsing fails, an empty dictionary is returned.
-    
+
     Returns:
         Parsed YAML content as a dict; an empty dict if the file is missing or parsing fails.
-    
+
     Raises:
         ImportError: If PyYAML is not installed.
     """
     try:
         import yaml
-    except ImportError:
-        logger.error(
+    except ImportError as exc:
+        logger.exception(
             "PyYAML is required for provider presets. Install with: pip install pyyaml"
         )
         raise ImportError(
             "PyYAML is required for provider presets. "
             "Install with: pip install pyyaml"
-        )
+        ) from exc
 
     if not file_path.exists():
         return {}
@@ -218,18 +218,18 @@ def _load_yaml_file(file_path: Path) -> dict[str, Any]:
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
-    except Exception as e:
-        logger.error("Failed to load YAML file %s: %s", file_path, e)
+    except (OSError, yaml.YAMLError) as e:
+        logger.exception("Failed to load YAML file %s: %s", file_path, e)
         return {}
 
 
 def _load_json_file(file_path: Path) -> dict[str, Any]:
     """
     Load and parse a JSON file into a dictionary.
-    
+
     Parameters:
         file_path (Path): Path to the JSON file to read.
-    
+
     Returns:
         dict[str, Any]: Parsed JSON content as a dictionary. Returns an empty dictionary if the file does not exist or if reading/parsing fails.
     """
@@ -239,8 +239,8 @@ def _load_json_file(file_path: Path) -> dict[str, Any]:
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception as e:
-        logger.error("Failed to load JSON file %s: %s", file_path, e)
+    except (OSError, json.JSONDecodeError) as e:
+        logger.exception("Failed to load JSON file %s: %s", file_path, e)
         return {}
 
 
@@ -286,12 +286,57 @@ def _parse_preset_dict(preset_id: str, data: dict[str, Any]) -> ProviderPreset:
     )
 
 
+def _load_presets_from_dir(
+    dir_path: Path,
+    yaml_name: str,
+    json_name: str,
+    log_prefix: str,
+) -> dict[str, ProviderPreset]:
+    """
+    Load provider presets from YAML or JSON files in a directory.
+
+    Tries YAML first, then JSON. Supports both 'providers' key and flat format.
+
+    Parameters:
+        dir_path: Directory to load presets from.
+        yaml_name: Name of YAML file to try (e.g., 'providers.yaml').
+        json_name: Name of JSON file to try (e.g., 'providers.json').
+        log_prefix: Prefix for log messages (e.g., 'user', 'project').
+
+    Returns:
+        Mapping of preset IDs to ProviderPreset instances.
+    """
+    presets: dict[str, ProviderPreset] = {}
+
+    yaml_file = dir_path / yaml_name
+    json_file = dir_path / json_name
+
+    if yaml_file.exists():
+        data = _load_yaml_file(yaml_file)
+        providers_data = data.get("providers", data)  # Support flat format too
+
+        for preset_id, preset_data in providers_data.items():
+            if isinstance(preset_data, dict):
+                presets[preset_id] = _parse_preset_dict(preset_id, preset_data)
+                logger.debug("Loaded %s preset: %s", log_prefix, preset_id)
+    elif json_file.exists():
+        data = _load_json_file(json_file)
+        providers_data = data.get("providers", data)
+
+        for preset_id, preset_data in providers_data.items():
+            if isinstance(preset_data, dict):
+                presets[preset_id] = _parse_preset_dict(preset_id, preset_data)
+                logger.debug("Loaded %s preset: %s", log_prefix, preset_id)
+
+    return presets
+
+
 def load_builtin_presets() -> dict[str, ProviderPreset]:
     """
     Load built-in provider presets from the package's providers.yaml.
-    
+
     If the providers.yaml file is missing or cannot be parsed, returns an empty mapping.
-    
+
     Returns:
         A mapping of preset IDs to ProviderPreset instances; empty if no built-in presets are available.
     """
@@ -315,39 +360,18 @@ def load_builtin_presets() -> dict[str, ProviderPreset]:
 def load_user_presets() -> dict[str, ProviderPreset]:
     """
     Load user-level provider presets from the user's ~/.claude directory.
-    
+
     Checks for providers.yaml first, then providers.json. Each file may contain either a top-level
     "providers" mapping or a flat mapping of preset IDs to preset dictionaries; valid preset entries
     are converted to ProviderPreset instances.
-    
+
     Returns:
         dict[str, ProviderPreset]: Mapping of preset IDs to loaded ProviderPreset objects.
     """
-    presets: dict[str, ProviderPreset] = {}
     user_dir = Path.home() / ".claude"
-
-    # Try YAML first, then JSON
-    yaml_file = user_dir / "providers.yaml"
-    json_file = user_dir / "providers.json"
-
-    if yaml_file.exists():
-        data = _load_yaml_file(yaml_file)
-        providers_data = data.get("providers", data)  # Support flat format too
-
-        for preset_id, preset_data in providers_data.items():
-            if isinstance(preset_data, dict):
-                presets[preset_id] = _parse_preset_dict(preset_id, preset_data)
-                logger.debug("Loaded user preset: %s", preset_id)
-    elif json_file.exists():
-        data = _load_json_file(json_file)
-        providers_data = data.get("providers", data)
-
-        for preset_id, preset_data in providers_data.items():
-            if isinstance(preset_data, dict):
-                presets[preset_id] = _parse_preset_dict(preset_id, preset_data)
-                logger.debug("Loaded user preset: %s", preset_id)
-
-    return presets
+    return _load_presets_from_dir(
+        user_dir, "providers.yaml", "providers.json", "user"
+    )
 
 
 def load_project_presets(project_dir: Path | None = None) -> dict[str, ProviderPreset]:
@@ -359,31 +383,10 @@ def load_project_presets(project_dir: Path | None = None) -> dict[str, ProviderP
     Returns:
         Dictionary mapping preset IDs to ProviderPreset objects
     """
-    presets: dict[str, ProviderPreset] = {}
     project_dir = project_dir or Path.cwd()
-
-    # Try YAML first, then JSON
-    yaml_file = project_dir / "claude_providers.yaml"
-    json_file = project_dir / "claude_providers.json"
-
-    if yaml_file.exists():
-        data = _load_yaml_file(yaml_file)
-        providers_data = data.get("providers", data)
-
-        for preset_id, preset_data in providers_data.items():
-            if isinstance(preset_data, dict):
-                presets[preset_id] = _parse_preset_dict(preset_id, preset_data)
-                logger.debug("Loaded project preset: %s", preset_id)
-    elif json_file.exists():
-        data = _load_json_file(json_file)
-        providers_data = data.get("providers", data)
-
-        for preset_id, preset_data in providers_data.items():
-            if isinstance(preset_data, dict):
-                presets[preset_id] = _parse_preset_dict(preset_id, preset_data)
-                logger.debug("Loaded project preset: %s", preset_id)
-
-    return presets
+    return _load_presets_from_dir(
+        project_dir, "claude_providers.yaml", "claude_providers.json", "project"
+    )
 
 
 def load_all_presets(
@@ -490,7 +493,7 @@ def apply_provider_environment(
     applied: dict[str, str] = {}
 
     for key, value in env_vars.items():
-        if override_existing or not os.getenv(key):
+        if override_existing or key not in os.environ:
             os.environ[key] = value
             applied[key] = value
             logger.debug("Set environment variable: %s", key)
