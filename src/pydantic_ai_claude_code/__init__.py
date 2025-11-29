@@ -51,6 +51,7 @@ Logging:
 
 import logging
 
+from .cc_tools import CCTools, ToolDefinition
 from .exceptions import ClaudeOAuthError
 from .model import ClaudeCodeModel
 from .provider import ClaudeCodeProvider
@@ -62,7 +63,7 @@ from .provider_presets import (
     load_all_presets,
 )
 from .registration import register_claude_code_model
-from .tools import MCPTool
+from .sdk_adapter import SDKAdapter
 from .types import ClaudeCodeSettings
 
 # Import new modular components for convenient access
@@ -97,13 +98,15 @@ except Exception:
     __version__ = "0.0.0.dev"
 
 __all__ = [
-    # Main classes
+    "CCTools",
     "ClaudeCodeModel",
     "ClaudeCodeProvider",
     "ClaudeCodeSettings",
     "ClaudeOAuthError",
     "MCPTool",
     "ProviderPreset",
+    "SDKAdapter",
+    "ToolDefinition",
     "get_preset",
     "get_presets_by_category",
     "list_presets",

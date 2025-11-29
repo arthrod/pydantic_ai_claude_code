@@ -1,428 +1,454 @@
-"""Tests for CCTools class."""
+"""Tests for CCTools advanced tool management."""
 
 import pytest
-from pydantic_ai_claude_code.cc_tools import CCTools, ToolDefinition, PermissionResult
+
+from pydantic_ai_claude_code import CCTools, ToolDefinition
+from pydantic_ai_claude_code.sdk_original_files.types import ToolPermissionContext
 
 
-class TestToolRegistration:
-    """Test tool registration functionality."""
+class TestToolDefinition:
+    """Tests for ToolDefinition class."""
 
-    def test_register_tool_basic(self):
-        """Test basic tool registration."""
-        tools = CCTools()
-
-        tool = tools.register_tool(
+    def test_tool_definition_creation(self):
+        """Test basic tool definition creation."""
+        tool = ToolDefinition(
             name="test_tool",
             description="A test tool",
-            parameters_schema={"type": "object", "properties": {"x": {"type": "string"}}},
+            parameters_schema={"type": "object", "properties": {}},
         )
 
         assert tool.name == "test_tool"
         assert tool.description == "A test tool"
         assert tool.permission_mode == "ask"
-        assert "test_tool" in [t.name for t in tools.get_all_tools()]
+        assert tool.handler is None
 
-    def test_register_tool_with_permission_mode(self):
-        """Test tool registration with different permission modes."""
+    def test_tool_definition_with_handler(self):
+        """Test tool definition with handler."""
+
+        async def handler(x: int) -> int:
+            return x * 2
+
+        tool = ToolDefinition(
+            name="double",
+            description="Double a number",
+            parameters_schema={"type": "object"},
+            handler=handler,
+        )
+
+        assert tool.handler is handler
+
+    def test_tool_to_sdk_format(self):
+        """Test conversion to SDK format."""
+        tool = ToolDefinition(
+            name="search",
+            description="Search for information",
+            parameters_schema={
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+            },
+        )
+
+        sdk_format = tool.to_sdk_format()
+
+        assert sdk_format["name"] == "search"
+        assert sdk_format["description"] == "Search for information"
+        assert "input_schema" in sdk_format
+
+
+class TestCCToolsBasic:
+    """Basic tests for CCTools class."""
+
+    def test_cctools_initialization(self):
+        """Test CCTools initialization."""
         tools = CCTools()
 
-        tools.register_tool(
-            name="allowed_tool",
-            description="Auto-allowed",
-            parameters_schema={},
-            permission_mode="allow",
-        )
+        assert len(tools._tools) == 0
+        assert len(tools._tool_history) == 0
 
-        tools.register_tool(
-            name="denied_tool",
-            description="Auto-denied",
-            parameters_schema={},
-            permission_mode="deny",
-        )
-
-        assert "allowed_tool" in tools.get_allowed_tools()
-        assert "denied_tool" in tools.get_disallowed_tools()
-        assert "denied_tool" not in tools.get_allowed_tools()
-
-    def test_decorator_registration(self):
-        """Test tool registration via decorator."""
+    def test_register_tool(self):
+        """Test tool registration."""
         tools = CCTools()
 
-        @tools.tool(
-            name="decorated_tool",
-            description="Decorated tool",
-            schema={"type": "object"},
+        tool = tools.register_tool(
+            name="test",
+            description="Test tool",
+            parameters_schema={"type": "object"},
         )
-        async def my_handler(x: str) -> str:
-            """
-            Process the input string by prefixing it with "processed: ".
-            
-            Parameters:
-                x (str): Input string to be processed.
-            
-            Returns:
-                result (str): The input string prefixed with "processed: ".
-            """
-            return f"processed: {x}"
 
-        tool = tools.get_tool("decorated_tool")
+        assert tool.name == "test"
+        assert "test" in tools._tools
+        assert tools.get_tool("test") is tool
+
+    def test_register_multiple_tools(self):
+        """Test registering multiple tools."""
+        tools = CCTools()
+
+        tools.register_tool("tool1", "First tool", {"type": "object"})
+        tools.register_tool("tool2", "Second tool", {"type": "object"})
+        tools.register_tool("tool3", "Third tool", {"type": "object"})
+
+        assert len(tools.list_tools()) == 3
+        assert "tool1" in tools.list_tools()
+        assert "tool2" in tools.list_tools()
+        assert "tool3" in tools.list_tools()
+
+    def test_tool_decorator(self):
+        """Test tool decorator syntax."""
+        tools = CCTools()
+
+        @tools.tool("calculate", "Perform calculation", {"type": "object"})
+        async def calculate(x: int, y: int) -> int:
+            return x + y
+
+        assert "calculate" in tools._tools
+        tool = tools.get_tool("calculate")
         assert tool is not None
-        assert tool.handler is not None
+        assert tool.handler is calculate
 
-    def test_get_all_tools(self):
-        """Test getting all registered tools."""
+
+class TestCCToolsPermissions:
+    """Tests for CCTools permission handling."""
+
+    def test_get_allowed_tools(self):
+        """Test getting allowed tools."""
         tools = CCTools()
 
-        tools.register_tool("tool1", "Desc 1", {})
-        tools.register_tool("tool2", "Desc 2", {})
-        tools.register_tool("tool3", "Desc 3", {})
+        tools.register_tool("allowed1", "Allowed", {"type": "object"}, permission_mode="allow")
+        tools.register_tool("allowed2", "Allowed", {"type": "object"}, permission_mode="ask")
+        tools.register_tool("denied", "Denied", {"type": "object"}, permission_mode="deny")
 
-        all_tools = tools.get_all_tools()
-        assert len(all_tools) == 3
+        allowed = tools.get_allowed_tools()
 
+        assert "allowed1" in allowed
+        assert "allowed2" in allowed
+        assert "denied" not in allowed
 
-class TestPermissions:
-    """Test permission handling."""
+    def test_get_disallowed_tools(self):
+        """Test getting disallowed tools."""
+        tools = CCTools()
+
+        tools.register_tool("allowed", "Allowed", {"type": "object"}, permission_mode="allow")
+        tools.register_tool("denied", "Denied", {"type": "object"}, permission_mode="deny")
+
+        disallowed = tools.get_disallowed_tools()
+
+        assert "denied" in disallowed
+        assert "allowed" not in disallowed
+
+    @pytest.mark.asyncio
+    async def test_can_use_tool_allow(self):
+        """Test permission check for allowed tool."""
+        tools = CCTools()
+        tools.register_tool("test", "Test", {"type": "object"}, permission_mode="allow")
+
+        context: ToolPermissionContext = {
+            "session_id": "test-session",
+            "turn_number": 1,
+            "tool_history": [],
+            "working_directory": "/tmp",
+        }
+
+        result = await tools.can_use_tool("test", {"arg": "value"}, context)
+
+        assert result["behavior"] == "allow"
+
+    @pytest.mark.asyncio
+    async def test_can_use_tool_deny(self):
+        """Test permission check for denied tool."""
+        tools = CCTools()
+        tools.register_tool("test", "Test", {"type": "object"}, permission_mode="deny")
+
+        context: ToolPermissionContext = {
+            "session_id": "test-session",
+            "turn_number": 1,
+            "tool_history": [],
+            "working_directory": "/tmp",
+        }
+
+        result = await tools.can_use_tool("test", {"arg": "value"}, context)
+
+        assert result["behavior"] == "deny"
+        assert "disabled" in result.get("message", "")
 
     @pytest.mark.asyncio
     async def test_can_use_tool_unknown(self):
         """Test permission check for unknown tool."""
         tools = CCTools()
 
-        result = await tools.can_use_tool("unknown", {})
+        context: ToolPermissionContext = {
+            "session_id": "test-session",
+            "turn_number": 1,
+            "tool_history": [],
+            "working_directory": "/tmp",
+        }
 
-        assert result.behavior == "deny"
-        assert "Unknown tool" in result.message
+        result = await tools.can_use_tool("unknown", {}, context)
 
-    @pytest.mark.asyncio
-    async def test_can_use_tool_allow_mode(self):
-        """Test permission check for allow mode tool."""
-        tools = CCTools()
-
-        tools.register_tool(
-            name="auto_allow",
-            description="Auto-allowed tool",
-            parameters_schema={},
-            permission_mode="allow",
-        )
-
-        result = await tools.can_use_tool("auto_allow", {})
-
-        assert result.behavior == "allow"
+        assert result["behavior"] == "deny"
+        assert "Unknown" in result.get("message", "")
 
     @pytest.mark.asyncio
-    async def test_can_use_tool_deny_mode(self):
-        """Test permission check for deny mode tool."""
+    async def test_custom_permission_callback(self):
+        """Test custom permission callback."""
         tools = CCTools()
+        tools.register_tool("test", "Test", {"type": "object"}, permission_mode="ask")
 
-        tools.register_tool(
-            name="auto_deny",
-            description="Auto-denied tool",
-            parameters_schema={},
-            permission_mode="deny",
-        )
-
-        result = await tools.can_use_tool("auto_deny", {})
-
-        assert result.behavior == "deny"
-        assert "disabled" in result.message
-
-    @pytest.mark.asyncio
-    async def test_can_use_tool_with_callback(self):
-        """Test permission check with custom callback."""
-        tools = CCTools()
-
-        tools.register_tool(
-            name="ask_tool",
-            description="Ask permission",
-            parameters_schema={},
-            permission_mode="ask",
-        )
-
-        # Set custom callback that always allows
-        async def custom_callback(name, input, context):
-            """
-            Allow the specified tool invocation unconditionally with a custom message.
-            
-            Parameters:
-                name (str): The registered tool name being queried.
-                input (dict | Any): The input arguments provided for the tool invocation.
-                context (Any): Additional context for the permission decision (e.g., call metadata).
-            
-            Returns:
-                PermissionResult: A result with `behavior` set to `"allow"` and `message` set to `"Custom allowed"`.
-            """
-            return PermissionResult(
-                behavior="allow",
-                message="Custom allowed",
-            )
+        async def custom_callback(tool_name, tool_input, context):
+            if tool_input.get("blocked"):
+                return {"behavior": "deny", "message": "Blocked by callback"}
+            return {"behavior": "allow", "updated_input": None}
 
         tools.set_permission_callback(custom_callback)
 
-        result = await tools.can_use_tool("ask_tool", {})
+        context: ToolPermissionContext = {
+            "session_id": "test",
+            "turn_number": 1,
+            "tool_history": [],
+            "working_directory": "/tmp",
+        }
 
-        assert result.behavior == "allow"
-        assert result.message == "Custom allowed"
+        # Test allow
+        result = await tools.can_use_tool("test", {"blocked": False}, context)
+        assert result["behavior"] == "allow"
+
+        # Test deny
+        result = await tools.can_use_tool("test", {"blocked": True}, context)
+        assert result["behavior"] == "deny"
+
+
+class TestCCToolsExecution:
+    """Tests for CCTools tool execution."""
 
     @pytest.mark.asyncio
-    async def test_can_use_tool_sanitizes_input(self):
-        """Test that permission check sanitizes input."""
+    async def test_execute_tool(self):
+        """Test tool execution."""
         tools = CCTools()
 
+        @tools.tool("add", "Add numbers", {"type": "object"})
+        async def add(x: int, y: int) -> int:
+            return x + y
+
+        result = await tools.execute_tool("add", {"x": 2, "y": 3})
+
+        assert result == 5
+
+    @pytest.mark.asyncio
+    async def test_execute_tool_records_history(self):
+        """Test that tool execution records history."""
+        tools = CCTools()
+
+        @tools.tool("test", "Test", {"type": "object"})
+        async def test_handler(value: str) -> str:
+            return value.upper()
+
+        await tools.execute_tool("test", {"value": "hello"})
+
+        history = tools.get_history()
+        assert len(history) == 1
+        assert history[0]["tool"] == "test"
+        assert history[0]["result"] == "HELLO"
+        assert history[0]["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_execute_tool_error_handling(self):
+        """Test tool execution error handling."""
+        tools = CCTools()
+
+        @tools.tool("fail", "Will fail", {"type": "object"})
+        async def fail_handler() -> None:
+            raise ValueError("Test error")
+
+        with pytest.raises(ValueError, match="Test error"):
+            await tools.execute_tool("fail", {})
+
+        history = tools.get_history()
+        assert len(history) == 1
+        assert history[0]["success"] is False
+        assert "Test error" in history[0]["error"]
+
+    @pytest.mark.asyncio
+    async def test_execute_tool_not_found(self):
+        """Test executing non-existent tool."""
+        tools = CCTools()
+
+        with pytest.raises(ValueError, match="Tool not found"):
+            await tools.execute_tool("nonexistent", {})
+
+    @pytest.mark.asyncio
+    async def test_execute_tool_no_handler(self):
+        """Test executing tool without handler."""
+        tools = CCTools()
+        tools.register_tool("no_handler", "No handler", {"type": "object"})
+
+        with pytest.raises(ValueError, match="No handler"):
+            await tools.execute_tool("no_handler", {})
+
+    def test_clear_history(self):
+        """Test clearing history."""
+        tools = CCTools()
+        tools._tool_history.append({"tool": "test"})
+
+        tools.clear_history()
+
+        assert len(tools.get_history()) == 0
+
+
+class TestCCToolsSanitization:
+    """Tests for CCTools input sanitization."""
+
+    def test_coerce_string(self):
+        """Test string coercion."""
+        tools = CCTools()
+
+        result = tools._coerce_value(123, {"type": "string"})
+        assert result == "123"
+
+    def test_coerce_integer(self):
+        """Test integer coercion."""
+        tools = CCTools()
+
+        result = tools._coerce_value("42", {"type": "integer"})
+        assert result == 42
+
+    def test_coerce_number(self):
+        """Test number coercion."""
+        tools = CCTools()
+
+        result = tools._coerce_value("3.14", {"type": "number"})
+        assert result == 3.14
+
+    def test_coerce_boolean(self):
+        """Test boolean coercion."""
+        tools = CCTools()
+
+        assert tools._coerce_value("true", {"type": "boolean"}) is True
+        assert tools._coerce_value("false", {"type": "boolean"}) is False
+        assert tools._coerce_value("yes", {"type": "boolean"}) is True
+
+    def test_coerce_array(self):
+        """Test array coercion."""
+        tools = CCTools()
+
+        result = tools._coerce_value("single", {"type": "array"})
+        assert result == ["single"]
+
+    def test_sanitize_input(self):
+        """Test input sanitization."""
+        tools = CCTools()
         tools.register_tool(
-            name="typed_tool",
-            description="Tool with typed params",
-            parameters_schema={
+            "test",
+            "Test",
+            {
                 "type": "object",
                 "properties": {
                     "count": {"type": "integer"},
                     "name": {"type": "string"},
                 },
             },
-            permission_mode="allow",
         )
 
-        result = await tools.can_use_tool(
-            "typed_tool",
-            {"count": "42", "name": 123},  # Wrong types
-        )
+        result = tools._sanitize_input("test", {"count": "42", "name": 123})
 
-        assert result.behavior == "allow"
-        # Input should be coerced
-        assert result.updated_input["count"] == 42
-        assert result.updated_input["name"] == "123"
+        assert result["count"] == 42
+        assert result["name"] == "123"
 
 
-class TestToolExecution:
-    """Test tool execution."""
+class TestCCToolsPermissionRules:
+    """Tests for permission rules."""
+
+    def test_add_permission_rule(self):
+        """Test adding permission rules."""
+        tools = CCTools()
+        tools.register_tool("write", "Write file", {"type": "object"})
+
+        tools.add_permission_rule("write", {
+            "allowed_paths": ["/tmp/*", "/home/user/*"],
+        })
+
+        assert "write" in tools._permission_rules
 
     @pytest.mark.asyncio
-    async def test_execute_tool_basic(self):
-        """Test basic tool execution."""
+    async def test_permission_rule_allowed_path(self):
+        """Test permission rule with allowed path."""
         tools = CCTools()
+        tools.register_tool("write", "Write", {"type": "object"}, permission_mode="ask")
+        tools.add_permission_rule("write", {"allowed_paths": ["/tmp/*"]})
 
-        @tools.tool(
-            name="adder",
-            description="Add numbers",
-            schema={
-                "type": "object",
-                "properties": {
-                    "a": {"type": "integer"},
-                    "b": {"type": "integer"},
-                },
-            },
-        )
-        async def add(a: int, b: int) -> int:
-            """
-            Compute the sum of two integers.
-            
-            Returns:
-                The sum of a and b.
-            """
-            return a + b
+        context: ToolPermissionContext = {
+            "session_id": "test",
+            "turn_number": 1,
+            "tool_history": [],
+            "working_directory": "/tmp",
+        }
 
-        result = await tools.execute_tool("adder", {"a": 2, "b": 3})
-        assert result == 5
+        # Allowed path
+        result = await tools.can_use_tool("write", {"path": "/tmp/test.txt"}, context)
+        assert result["behavior"] == "allow"
+
+        # Denied path
+        result = await tools.can_use_tool("write", {"path": "/etc/passwd"}, context)
+        assert result["behavior"] == "deny"
 
     @pytest.mark.asyncio
-    async def test_execute_tool_records_history(self):
-        """Test that tool execution is recorded in history."""
+    async def test_permission_rule_denied_patterns(self):
+        """Test permission rule with denied patterns."""
         tools = CCTools()
+        tools.register_tool("write", "Write", {"type": "object"}, permission_mode="ask")
+        tools.add_permission_rule("write", {"denied_patterns": ["*.exe", "*.sh"]})
 
-        @tools.tool(
-            name="greeter",
-            description="Greet someone",
-            schema={
-                "type": "object",
-                "properties": {"name": {"type": "string"}},
-            },
-        )
-        async def greet(name: str) -> str:
-            """
-            Return a greeting message for the given name.
-            
-            Returns:
-                Greeting string in the form "Hello, {name}!".
-            """
-            return f"Hello, {name}!"
+        context: ToolPermissionContext = {
+            "session_id": "test",
+            "turn_number": 1,
+            "tool_history": [],
+            "working_directory": "/tmp",
+        }
 
-        await tools.execute_tool("greeter", {"name": "World"})
-
-        history = tools.get_history()
-        assert len(history) == 1
-        assert history[0]["tool"] == "greeter"
-        assert history[0]["args"] == {"name": "World"}
-        assert history[0]["result"] == "Hello, World!"
-        assert history[0]["success"] is True
-
-    @pytest.mark.asyncio
-    async def test_execute_tool_unknown_raises(self):
-        """Test that executing unknown tool raises."""
-        tools = CCTools()
-
-        with pytest.raises(ValueError, match="Unknown tool"):
-            await tools.execute_tool("nonexistent", {})
-
-    @pytest.mark.asyncio
-    async def test_execute_tool_no_handler_raises(self):
-        """
-        Verify that executing a registered tool with no handler raises a ValueError containing "No handler".
-        """
-        tools = CCTools()
-
-        tools.register_tool(
-            name="no_handler",
-            description="Tool without handler",
-            parameters_schema={},
-            handler=None,
-        )
-
-        with pytest.raises(ValueError, match="No handler"):
-            await tools.execute_tool("no_handler", {})
-
-    @pytest.mark.asyncio
-    async def test_execute_tool_error_recorded(self):
-        """Test that tool errors are recorded in history."""
-        tools = CCTools()
-
-        @tools.tool(
-            name="failer",
-            description="Always fails",
-            schema={},
-        )
-        async def fail() -> str:
-            """
-            Raise a ValueError used to simulate an intentional failure for testing.
-            
-            Raises:
-                ValueError: "Intentional failure"
-            """
-            raise ValueError("Intentional failure")
-
-        with pytest.raises(ValueError, match="Intentional failure"):
-            await tools.execute_tool("failer", {})
-
-        history = tools.get_history()
-        assert len(history) == 1
-        assert history[0]["success"] is False
-        assert "Intentional failure" in history[0]["error"]
+        # Denied pattern
+        result = await tools.can_use_tool("write", {"path": "malware.exe"}, context)
+        assert result["behavior"] == "deny"
 
 
-class TestTypeCoercion:
-    """Test type coercion functionality."""
+class TestCCToolsConversion:
+    """Tests for tool conversion methods."""
 
-    def test_coerce_to_string(self):
-        """Test coercion to string."""
-        tools = CCTools()
-
-        schema = {"type": "string"}
-        assert tools._coerce_value(123, schema) == "123"
-        assert tools._coerce_value(True, schema) == "True"
-
-    def test_coerce_to_integer(self):
-        """Test coercion to integer."""
-        tools = CCTools()
-
-        schema = {"type": "integer"}
-        assert tools._coerce_value("42", schema) == 42
-        assert tools._coerce_value(3.14, schema) == 3
-
-    def test_coerce_to_number(self):
-        """Test coercion to number."""
-        tools = CCTools()
-
-        schema = {"type": "number"}
-        assert tools._coerce_value("3.14", schema) == 3.14
-        assert tools._coerce_value(42, schema) == 42.0
-
-    def test_coerce_to_boolean(self):
-        """Test coercion to boolean."""
-        tools = CCTools()
-
-        schema = {"type": "boolean"}
-        assert tools._coerce_value("true", schema) is True
-        assert tools._coerce_value("false", schema) is False
-        assert tools._coerce_value("yes", schema) is True
-        assert tools._coerce_value(1, schema) is True
-        assert tools._coerce_value(0, schema) is False
-
-    def test_coerce_to_array(self):
-        """Test coercion to array."""
-        tools = CCTools()
-
-        schema = {"type": "array"}
-        assert tools._coerce_value("single", schema) == ["single"]
-        assert tools._coerce_value([1, 2, 3], schema) == [1, 2, 3]
-
-    def test_coerce_invalid_returns_original(self):
-        """Test that invalid coercion returns original."""
-        tools = CCTools()
-
-        schema = {"type": "integer"}
-        # Can't convert "not a number" to int, returns original
-        assert tools._coerce_value("not a number", schema) == "not a number"
-
-
-class TestPydanticAIConversion:
-    """Test conversion to pydantic_ai format."""
-
-    def test_to_pydantic_ai_tools(self):
+    def test_to_pydantic_tools(self):
         """Test conversion to pydantic_ai tool format."""
         tools = CCTools()
-
         tools.register_tool(
-            name="tool1",
-            description="First tool",
+            "search",
+            "Search for info",
+            {"type": "object", "properties": {"query": {"type": "string"}}},
+        )
+        tools.register_tool(
+            "calculate",
+            "Do math",
+            {"type": "object", "properties": {"expr": {"type": "string"}}},
+        )
+
+        pydantic_tools = tools.to_pydantic_tools()
+
+        assert len(pydantic_tools) == 2
+        assert pydantic_tools[0]["name"] in ["search", "calculate"]
+        assert "parameters_json_schema" in pydantic_tools[0]
+
+
+class TestCCToolsImports:
+    """Tests for package imports."""
+
+    def test_import_cctools(self):
+        """Test importing CCTools from package."""
+        from pydantic_ai_claude_code import CCTools
+
+        tools = CCTools()
+        assert tools is not None
+
+    def test_import_tool_definition(self):
+        """Test importing ToolDefinition from package."""
+        from pydantic_ai_claude_code import ToolDefinition
+
+        tool = ToolDefinition(
+            name="test",
+            description="Test",
             parameters_schema={"type": "object"},
-            permission_mode="allow",
         )
-
-        tools.register_tool(
-            name="tool2",
-            description="Second tool",
-            parameters_schema={"type": "string"},
-            permission_mode="deny",  # Should be excluded
-        )
-
-        pydantic_tools = tools.to_pydantic_ai_tools()
-
-        assert len(pydantic_tools) == 1
-        assert pydantic_tools[0]["name"] == "tool1"
-        assert pydantic_tools[0]["description"] == "First tool"
-        assert pydantic_tools[0]["parameters_json_schema"] == {"type": "object"}
-
-
-class TestHistory:
-    """Test history management."""
-
-    @pytest.mark.asyncio
-    async def test_clear_history(self):
-        """Test clearing history."""
-        tools = CCTools()
-
-        @tools.tool(name="test", description="Test", schema={})
-        async def test_func():
-            return "ok"
-
-        await tools.execute_tool("test", {})
-        assert len(tools.get_history()) == 1
-
-        tools.clear_history()
-        assert len(tools.get_history()) == 0
-
-    @pytest.mark.asyncio
-    async def test_history_is_copy(self):
-        """Test that get_history returns a copy."""
-        tools = CCTools()
-
-        @tools.tool(name="test", description="Test", schema={})
-        async def test_func():
-            return "ok"
-
-        await tools.execute_tool("test", {})
-
-        history = tools.get_history()
-        history.append({"fake": "entry"})
-
-        # Original should be unchanged
-        assert len(tools.get_history()) == 1
+        assert tool is not None

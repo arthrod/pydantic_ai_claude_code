@@ -81,15 +81,81 @@ class ClaudeCodeProvider:
         Returns:
             Configured ClaudeCodeModel instance
         """
-        # Import here to avoid circular dependency
-        from .model import ClaudeCodeModel
+        settings: dict[str, Any] = {
+            "working_directory": str(self.working_directory)
+            if self.working_directory
+            else None,
+            "allowed_tools": self.allowed_tools,
+            "disallowed_tools": self.disallowed_tools,
+            "append_system_prompt": self.append_system_prompt,
+            "permission_mode": self.permission_mode,
+            "model": self.model,
+            "fallback_model": self.fallback_model,
+            "verbose": self.verbose,
+            "dangerously_skip_permissions": self.dangerously_skip_permissions,
+            "retry_on_rate_limit": self.retry_on_rate_limit,
+            "timeout_seconds": self.timeout_seconds,
+            "claude_cli_path": self.claude_cli_path,
+            "extra_cli_args": self.extra_cli_args,
+            "use_sandbox_runtime": self.use_sandbox_runtime,
+            "sandbox_runtime_path": self.sandbox_runtime_path,
+        }
 
-        return ClaudeCodeModel(
-            model_name=model_name,
-            provider_preset=provider_preset,
-            cli_path=self._cli_path,
+        # Apply overrides
+        for key, value in overrides.items():
+            settings[key] = value
+
+        # Remove None values and return as ClaudeCodeSettings
+        # TypedDict expects specific keys, but total=False allows partial dicts
+        final_settings = {k: v for k, v in settings.items() if v is not None}
+
+        if overrides:
+            logger.debug("Generated settings with overrides: %s", overrides)
+
+        return cast(ClaudeCodeSettings, final_settings)
+
+    def to_sdk_options(self, **overrides: Any) -> "ClaudeAgentOptions":
+        """Convert provider settings to SDK options format.
+
+        Args:
+            **overrides: Override specific settings
+
+        Returns:
+            SDK agent options dictionary
+        """
+        from .sdk_original_files.types import ClaudeAgentOptions
+
+        settings = self.get_settings(**overrides)
+
+        options: ClaudeAgentOptions = ClaudeAgentOptions(
+            model=settings.get("model", "sonnet"),
+            cwd=settings.get("working_directory"),
+            allowed_tools=settings.get("allowed_tools", []),
+            disallowed_tools=settings.get("disallowed_tools", []),
+            permission_mode=settings.get("permission_mode", "bypassPermissions"),
+            cli_path=settings.get("claude_cli_path"),
+            timeout_ms=settings.get("timeout_seconds", 900) * 1000,
+            verbose=settings.get("verbose", False),
+            append_system_prompt=settings.get("append_system_prompt"),
         )
 
-    def __repr__(self) -> str:
-        """String representation."""
-        return f"ClaudeCodeProvider(cli_path={self._cli_path!r})"
+        # Build extra args from extra_cli_args
+        extra_args = settings.get("extra_cli_args", [])
+        if extra_args:
+            options["extra_args"] = {}
+            i = 0
+            while i < len(extra_args):
+                arg = extra_args[i]
+                if arg.startswith("--"):
+                    key = arg[2:]
+                    # Check if next arg is a value
+                    if i + 1 < len(extra_args) and not extra_args[i + 1].startswith("--"):
+                        options["extra_args"][key] = extra_args[i + 1]
+                        i += 2
+                    else:
+                        options["extra_args"][key] = None
+                        i += 1
+                else:
+                    i += 1
+
+        return options
