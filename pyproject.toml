@@ -12,6 +12,7 @@ dependencies = [
     "pydantic>=2.11.9",
     "pydantic-ai>=1.0.15",
     "pydantic-ai-slim[duckduckgo]>=1.0.15",
+    "python-dotenv>=1.1.1",
     "pyyaml>=6.0",
 ]
 keywords = ["pydantic", "pydantic-ai", "claude", "claude-code", "ai", "llm", "agent"]
@@ -46,6 +47,7 @@ dev = [
     "pylint>=3.3.0",
     "bump-my-version>=1.2.4",
     "pytest-rerunfailures>=16.1",
+    "pytest-cov>=7.0.0",
 ]
 
 [tool.ruff]

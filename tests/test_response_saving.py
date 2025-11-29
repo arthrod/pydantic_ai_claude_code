@@ -87,23 +87,19 @@ def test_multiple_calls_create_separate_subdirectories():
 
 def test_temp_workspace_no_overwrite():
     """Test that temp workspaces create numbered subdirectories to prevent overwrites."""
-    # Use provider with temp workspace enabled
-    from pydantic_ai_claude_code import ClaudeCodeProvider
-
-    provider = ClaudeCodeProvider({"use_temp_workspace": True})
-
-    with provider:
+    # Create a temporary directory to use as workspace
+    with tempfile.TemporaryDirectory() as tmpdir:
         agent = Agent("claude-code:sonnet")
 
-        # Get settings from provider to use with agent
-        model_settings = ClaudeCodeModelSettings(**provider.get_settings())
-
-        # Get the temp workspace path
-        temp_workspace = Path(provider.working_directory)
+        # Create model settings with the temp workspace
+        temp_workspace = Path(tmpdir)
         assert temp_workspace.exists(), "Temp workspace should exist"
 
         # Make first call
-        result1 = agent.run_sync("What is 1+1?", model_settings=model_settings)
+        result1 = agent.run_sync(
+            "What is 1+1?",
+            model_settings=ClaudeCodeModelSettings(working_directory=tmpdir)
+        )
         assert result1.output is not None, "Expected result output"
 
         # Check that subdirectory '1' was created
@@ -111,8 +107,11 @@ def test_temp_workspace_no_overwrite():
         assert len(subdirs_after_first) == 1, f"Expected 1 subdirectory after first call, found {len(subdirs_after_first)}"
         assert subdirs_after_first[0].name == "1", f"Expected first subdir '1', got '{subdirs_after_first[0].name}'"
 
-        # Make second call with same settings
-        result2 = agent.run_sync("What is 2+2?", model_settings=model_settings)
+        # Make second call with same working directory
+        result2 = agent.run_sync(
+            "What is 2+2?",
+            model_settings=ClaudeCodeModelSettings(working_directory=tmpdir)
+        )
         assert result2.output is not None, "Expected result output"
 
         # Check that subdirectory '2' was created

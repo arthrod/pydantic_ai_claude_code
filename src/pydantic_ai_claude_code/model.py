@@ -1,11 +1,20 @@
-"""Claude Code model implementation for Pydantic AI."""
+"""Claude Code model implementation for Pydantic AI.
 
-from __future__ import annotations as _annotations
+This model wraps the local Claude CLI to provide a Pydantic AI compatible
+interface with support for:
+- Structured responses via output validation
+- Tool/function calling
+- Multi-turn conversations
+- Streaming responses
+- Provider presets for third-party providers
+"""
+
+from __future__ import annotations
 
 import json
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -26,8 +35,13 @@ from pydantic_ai.models import (
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RequestUsage
 
+from ._sdk.types import ClaudeAgentOptions, HookConfig
 from .messages import format_messages_for_claude
-from .provider import ClaudeCodeProvider
+from .provider_presets import (
+    ProviderPreset,
+    compute_provider_environment,
+    get_preset,
+)
 from .response_utils import (
     create_tool_call_part,
     get_working_directory,
@@ -42,6 +56,7 @@ from .temp_path_utils import generate_output_file_path, generate_temp_directory_
 from .types import ClaudeCodeSettings, ClaudeJSONResponse
 from .utils import (
     _determine_working_directory,
+    _setup_working_directory_and_prompt,
     build_claude_command,
     convert_primitive_value,
     run_claude_async,
@@ -55,84 +70,210 @@ class ClaudeCodeModel(Model):
     """Pydantic AI model implementation using Claude Code CLI.
 
     This model wraps the local Claude CLI to provide a Pydantic AI compatible
-    interface, supporting all features available through the CLI including:
-    - Structured responses via output validation
-    - Tool/function calling (via Claude's built-in tools)
-    - Web search (via Claude's WebSearch tool)
-    - Multi-turn conversations
+    interface, supporting all features available through the CLI.
+
+    Settings are merged in order:
+    1. Provider preset defaults
+    2. Agent config (from model_request_parameters)
+    3. Run-time overrides (from model_settings)
+
+    Examples:
+        >>> from pydantic_ai import Agent
+        >>> agent = Agent(model='claude-code:sonnet')
+        >>> result = await agent.run('Hello!')
+
+        # With provider preset
+        >>> agent = Agent(model='claude-code:deepseek:sonnet')
+
+        # With hooks at run-time
+        >>> result = await agent.run(
+        ...     'Hello!',
+        ...     model_settings={'hooks': [{'matcher': {'event': 'tool_use'}, 'commands': ['echo $TOOL_NAME']}]}
+        ... )
     """
 
     def __init__(
         self,
         model_name: str = "sonnet",
         *,
-        provider: ClaudeCodeProvider | None = None,
+        provider_preset: str | None = None,
+        cli_path: str | None = None,
     ):
         """Initialize Claude Code model.
 
         Args:
             model_name: Name of the Claude model to use (e.g., "sonnet", "opus",
                 or full model name like "claude-sonnet-4-5-20250929")
-            provider: Optional provider for managing Claude CLI execution
+            provider_preset: Optional preset ID (deepseek, kimi, etc.)
+            cli_path: Optional path to Claude CLI binary
         """
-        self._model_name = model_name
-        self.provider = provider or ClaudeCodeProvider()
+        self._model_alias = model_name
+        self._provider_preset_id = provider_preset
+        self._cli_path = cli_path
+        self._actual_model_name: str = model_name
+        self._preset_env_vars: dict[str, str] = {}
+        self._provider_preset: ProviderPreset | None = None
 
-        logger.debug("Initialized ClaudeCodeModel with model_name=%s", model_name)
+        # Load and apply provider preset if specified
+        if provider_preset:
+            self._provider_preset = get_preset(provider_preset)
+            if self._provider_preset:
+                # Compute environment variables (NOT applied globally)
+                self._preset_env_vars = compute_provider_environment(
+                    self._provider_preset,
+                    override_existing=False,
+                )
+                # Get actual model name from preset
+                self._actual_model_name = self._provider_preset.get_model_name(model_name)
+                logger.info(
+                    "Loaded provider preset '%s' with %d environment variables, model: %s",
+                    provider_preset,
+                    len(self._preset_env_vars),
+                    self._actual_model_name,
+                )
+            else:
+                logger.warning(
+                    "Provider preset '%s' not found. "
+                    "Available presets can be listed with list_presets()",
+                    provider_preset,
+                )
 
-    @staticmethod
-    def _preserve_user_settings(
-        original_settings: ClaudeCodeSettings | None,
-        new_settings: ClaudeCodeSettings,
-    ) -> None:
-        """Preserve user-provided settings from original request to new settings.
-
-        Args:
-            original_settings: Original settings dict (may be None)
-            new_settings: New settings dict to update with preserved values
-        """
-        if not original_settings:
-            return
-
-        # Preserve user-provided settings
-        if "additional_files" in original_settings:
-            new_settings["additional_files"] = original_settings["additional_files"]
-        if "timeout_seconds" in original_settings:
-            new_settings["timeout_seconds"] = original_settings["timeout_seconds"]
-        if "debug_save_prompts" in original_settings:
-            new_settings["debug_save_prompts"] = original_settings["debug_save_prompts"]
+        logger.debug(
+            "Initialized ClaudeCodeModel: model_alias=%s, actual_model=%s, preset=%s",
+            model_name,
+            self._actual_model_name,
+            provider_preset,
+        )
 
     @property
     def model_name(self) -> str:
-        """Get the model name."""
-        return f"claude-code:{self._model_name}"
+        """Get the full model identifier."""
+        if self._provider_preset_id:
+            return f"claude-code:{self._provider_preset_id}:{self._model_alias}"
+        return f"claude-code:{self._model_alias}"
 
     @property
     def system(self) -> str:
         """Get the system identifier."""
         return "claude-code"
 
+    def _build_options(
+        self,
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+    ) -> ClaudeCodeSettings:
+        """Build execution options by merging all settings sources.
+
+        Merge order (later overrides earlier):
+        1. Provider preset defaults
+        2. Agent config (from model_request_parameters)
+        3. Run-time overrides (from model_settings)
+
+        Args:
+            model_settings: Run-time settings from agent.run()
+            model_request_parameters: Agent-level config (tools, output schema)
+
+        Returns:
+            Merged settings dictionary
+        """
+        settings: dict[str, Any] = {}
+
+        # 1. Base settings from constructor
+        settings["model"] = self._actual_model_name
+        if self._cli_path:
+            settings["claude_cli_path"] = self._cli_path
+
+        # Provider preset env vars (passed to subprocess)
+        if self._preset_env_vars:
+            settings["__provider_env"] = self._preset_env_vars.copy()
+
+        # Always bypass permissions (full access)
+        settings["dangerously_skip_permissions"] = True
+
+        # Default settings
+        settings["use_temp_workspace"] = True
+        settings["retry_on_rate_limit"] = True
+        settings["timeout_seconds"] = 900
+        settings["use_sandbox_runtime"] = True
+
+        # 2. Agent-level config (from model_request_parameters)
+        if model_request_parameters.function_tools:
+            # Register function tools as allowed
+            settings["allowed_tools"] = [
+                tool.name for tool in model_request_parameters.function_tools
+            ]
+
+        # 3. Run-time overrides (from model_settings)
+        if model_settings:
+            # Map pydantic_ai model_settings to our settings format
+            if "working_directory" in model_settings:
+                settings["working_directory"] = model_settings["working_directory"]
+            if "timeout_seconds" in model_settings:
+                settings["timeout_seconds"] = model_settings["timeout_seconds"]
+            if "additional_files" in model_settings:
+                settings["additional_files"] = model_settings["additional_files"]
+            if "debug_save_prompts" in model_settings:
+                settings["debug_save_prompts"] = model_settings["debug_save_prompts"]
+            if "append_system_prompt" in model_settings:
+                settings["append_system_prompt"] = model_settings["append_system_prompt"]
+            if "verbose" in model_settings:
+                settings["verbose"] = model_settings["verbose"]
+
+            # Handle hooks from model_settings
+            if "hooks" in model_settings:
+                hooks_config = model_settings["hooks"]
+                if isinstance(hooks_config, list):
+                    settings["__hooks__"] = hooks_config
+
+            # Handle extra CLI args
+            if "extra_cli_args" in model_settings:
+                settings["extra_cli_args"] = model_settings["extra_cli_args"]
+
+        return settings  # type: ignore[return-value]
+
+    def _check_has_tool_results(self, messages: list[ModelMessage]) -> bool:
+        """Check if messages contain tool results."""
+        return any(
+            isinstance(part, ToolReturnPart)
+            for msg in messages
+            if isinstance(msg, ModelRequest)
+            for part in msg.parts
+        )
+
+    @staticmethod
+    def _xml_to_markdown(xml_text: str) -> str:
+        """Convert XML-tagged description to markdown format."""
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(xml_text, "html.parser")
+
+        summary = soup.find("summary")
+        returns = soup.find("returns")
+
+        parts = []
+        if summary:
+            summary_text = summary.get_text(strip=True)
+            if summary_text and not summary_text.endswith("."):
+                summary_text += "."
+            parts.append(summary_text)
+        if returns:
+            desc = returns.find("description")
+            if desc:
+                parts.append(f"Returns: {desc.get_text(strip=True)}")
+
+        return " ".join(parts) if parts else xml_text
+
     def _build_unstructured_output_instruction(
         self, settings: ClaudeCodeSettings
     ) -> str:
-        """Build instruction for unstructured (text) output via file.
-
-        Args:
-            settings: Settings dict to store output file path
-
-        Returns:
-            Instruction string to append to system prompt
-        """
-        # Generate unique filename for unstructured output in working directory
+        """Build instruction for unstructured (text) output via file."""
         working_dir = get_working_directory(settings)
         output_filename = generate_output_file_path(
             working_dir, "claude_unstructured_output", ".txt"
         )
         settings["__unstructured_output_file"] = output_filename
 
-        logger.debug("Unstructured output file path: %s", output_filename)
-
-        instruction = f"""# Output Instructions
+        return f"""# Output Instructions
 
 ## File Path
 
@@ -163,108 +304,35 @@ class ClaudeCodeModel(Model):
 
 """
 
-        return instruction
-
     def _build_structured_output_instruction(
         self, output_tool: Any, settings: ClaudeCodeSettings
     ) -> str:
-        """Build instruction for structured output using improved converter.
-
-        Args:
-            output_tool: The output tool definition
-            settings: Settings dict to store output file path
-
-        Returns:
-            Instruction string to append to system prompt
-        """
+        """Build instruction for structured output using improved converter."""
         schema = output_tool.parameters_json_schema
 
-        # Generate unique filename for structured output in working directory
         working_dir = get_working_directory(settings)
         output_filename = generate_output_file_path(
             working_dir, "claude_structured_output", ".json"
         )
         settings["__structured_output_file"] = output_filename
 
-        logger.debug("Structured output file path: %s", output_filename)
-
-        # Generate unique temp dir for field data in working directory
         temp_data_dir = generate_temp_directory_path(
             working_dir, "claude_data_structure", short_id=True
         )
         settings["__temp_json_dir"] = temp_data_dir
 
-        # Use new structure converter to build instructions
         return build_structure_instructions(schema, temp_data_dir)
-
-    def _check_has_tool_results(self, messages: list[ModelMessage]) -> bool:
-        """Check if messages contain tool results.
-
-        Args:
-            messages: List of messages to check
-
-        Returns:
-            True if any message contains ToolReturnPart
-        """
-        return any(
-            isinstance(part, ToolReturnPart)
-            for msg in messages
-            if isinstance(msg, ModelRequest)
-            for part in msg.parts
-        )
-
-    @staticmethod
-    def _xml_to_markdown(xml_text: str) -> str:
-        """Convert XML-tagged description to markdown format.
-
-        Args:
-            xml_text: Text with XML tags like <summary>, <returns>, <description>
-
-        Returns:
-            Markdown-formatted text
-        """
-        from bs4 import BeautifulSoup
-
-        soup = BeautifulSoup(xml_text, "html.parser")
-
-        summary = soup.find("summary")
-        returns = soup.find("returns")
-
-        parts = []
-        if summary:
-            summary_text = summary.get_text(strip=True)
-            # Ensure summary ends with period
-            if summary_text and not summary_text.endswith("."):
-                summary_text += "."
-            parts.append(summary_text)
-        if returns:
-            desc = returns.find("description")
-            if desc:
-                parts.append(f"Returns: {desc.get_text(strip=True)}")
-
-        return " ".join(parts) if parts else xml_text
 
     def _build_function_option_descriptions(
         self, function_tools: list[Any]
     ) -> list[str]:
-        """Build option descriptions for function selection prompt.
-
-        Args:
-            function_tools: List of function tool definitions
-
-        Returns:
-            List of formatted option descriptions
-        """
+        """Build option descriptions for function selection prompt."""
         option_descriptions = []
         for i, tool in enumerate(function_tools, 1):
             desc = tool.description or "No description"
             desc_clean = self._xml_to_markdown(desc)
 
             schema = tool.parameters_json_schema
-            logger.info("Tool %d: %s", i, tool.name)
-            logger.info("  Description: %s", desc_clean)
-            logger.info("  Schema: %s", json.dumps(schema, indent=2))
-
             params = schema.get("properties", {})
             param_hints = [
                 f"{param_name}: {param_schema.get('type', 'unknown')}"
@@ -283,20 +351,7 @@ class ClaudeCodeModel(Model):
     def _build_function_tools_prompt(
         self, function_tools: list[Any]
     ) -> tuple[str, dict[str, Any]]:
-        """Build function selection prompt and available functions dict.
-
-        Args:
-            function_tools: List of function tool definitions
-
-        Returns:
-            Tuple of (prompt string, available functions dict)
-        """
-        logger.info("=" * 80)
-        logger.info(
-            "BUILDING FUNCTION TOOLS PROMPT - Total tools: %d", len(function_tools)
-        )
-        logger.info("=" * 80)
-
+        """Build function selection prompt and available functions dict."""
         option_descriptions = self._build_function_option_descriptions(function_tools)
 
         prompt = f"""# Function Selection Task
@@ -366,17 +421,7 @@ CHOICE: none
         settings: ClaudeCodeSettings,
         is_streaming: bool = False,
     ) -> list[str]:
-        """Build system prompt parts for request.
-
-        Args:
-            model_request_parameters: Request parameters (includes output_tools and function_tools)
-            has_tool_results: Whether messages contain tool results
-            settings: Settings dict (will be modified)
-            is_streaming: Whether this is a streaming request (skips file output instructions)
-
-        Returns:
-            List of system prompt parts
-        """
+        """Build system prompt parts for request."""
         system_prompt_parts = []
         output_tools = (
             model_request_parameters.output_tools if model_request_parameters else []
@@ -415,19 +460,14 @@ CHOICE: none
             system_prompt_parts.append(function_selection_prompt)
 
         # Add output instructions
-        # Skip file writing instructions for streaming - we need direct text output
         if not is_streaming:
-            # Determine if we should add output instructions
             should_add_output_instructions = False
 
             if has_tool_results:
-                # After tool execution, always add output instructions
                 should_add_output_instructions = True
             elif not function_tools:
-                # No function tools - add output instructions
                 should_add_output_instructions = True
 
-            # Add appropriate output instruction (structured or unstructured)
             if should_add_output_instructions:
                 if output_tools:
                     json_instruction = self._build_structured_output_instruction(
@@ -449,57 +489,30 @@ CHOICE: none
         settings: ClaudeCodeSettings,
         has_tool_results: bool,
     ) -> str:
-        """Assemble final prompt with system instructions.
-
-        User messages are written to user_request.md file for maximum separation
-        between instructions and data.
-
-        Args:
-            messages: Message list
-            system_prompt_parts: System prompt parts to prepend
-            settings: Settings dict
-            has_tool_results: Whether to skip system prompt in messages
-
-        Returns:
-            Final assembled prompt string (instructions only, references user_request.md)
-        """
-        # Get working directory from settings for user request file
+        """Assemble final prompt with system instructions."""
         working_dir = settings.get("__working_directory", "/tmp")
 
-        # Format user messages and get tool result files
+        # Format user messages and write to file
         formatted_messages = format_messages_for_claude(
             messages, skip_system_prompt=has_tool_results, working_dir=working_dir
         )
-        logger.debug("Formatted user messages length: %d chars", len(formatted_messages))
 
-        # Write user messages to separate file for maximum separation
         user_request_path = Path(working_dir) / "user_request.md"
         user_request_path.parent.mkdir(parents=True, exist_ok=True)
         with open(user_request_path, "w", encoding="utf-8") as f:
             f.write(formatted_messages)
-        logger.debug("Wrote user messages to: %s", user_request_path)
 
-        # Build prompt with system instructions only (references user_request.md)
+        # Build prompt with system instructions only
         prompt = ""
 
-        # Include user-specified append_system_prompt first
         existing_prompt = settings.get("append_system_prompt")
         if existing_prompt:
             prompt = f"{existing_prompt}\n\n"
             settings.pop("append_system_prompt", None)
-            logger.debug(
-                "Added %d chars of user system prompt to prompt",
-                len(existing_prompt),
-            )
 
-        # Add system instructions
         if system_prompt_parts:
             combined_system_prompt = "\n\n".join(system_prompt_parts)
             prompt = f"{prompt}{combined_system_prompt}"
-            logger.debug(
-                "Added %d chars of system instructions to prompt",
-                len(combined_system_prompt),
-            )
 
         return prompt
 
@@ -508,16 +521,8 @@ CHOICE: none
         response: ClaudeJSONResponse,
         parts: list[TextPart | ToolCallPart],
     ) -> ModelResponse:
-        """Create ModelResponse with usage from Claude response.
-
-        Args:
-            response: Claude response to extract usage from
-            parts: Response parts (TextPart, ToolCallPart, etc.)
-
-        Returns:
-            ModelResponse with usage and timestamp
-        """
-        usage = ClaudeCodeModel._create_usage(response)
+        """Create ModelResponse with usage from Claude response."""
+        usage = self._create_usage(response)
         model_name = self._get_model_name(response)
         return ModelResponse(
             parts=parts,
@@ -527,610 +532,10 @@ CHOICE: none
         )
 
     def _prepare_working_directory(self, settings: ClaudeCodeSettings) -> None:
-        """Determine and set working directory early to ensure files are created in correct location.
-
-        This must be called before any file creation (tool results, binary content, etc.)
-
-        Args:
-            settings: Settings dict to update with __working_directory
-        """
+        """Determine and set working directory early."""
         if "__working_directory" not in settings:
             working_dir = _determine_working_directory(settings)
             settings["__working_directory"] = working_dir
-            logger.debug("Prepared working directory: %s", working_dir)
-
-    async def _handle_structured_follow_up(
-        self,
-        messages: list[ModelMessage],
-        model_request_parameters: ModelRequestParameters,
-        original_settings: ClaudeCodeSettings | None = None,
-    ) -> ModelResponse:
-        """Handle structured follow-up request when function selection is 'none' but output_type is set.
-
-        Args:
-            messages: Original message list
-            model_request_parameters: Request parameters with output_tools
-            original_settings: Original settings from initial request (to preserve additional_files, etc.)
-
-        Returns:
-            Model response with structured output
-        """
-        logger.info(
-            "Function selection was 'none', making follow-up structured request"
-        )
-
-        structured_settings = self.provider.get_settings(model=self._model_name)
-
-        # Preserve user-provided settings from original request
-        self._preserve_user_settings(original_settings, structured_settings)
-
-        # Disable function selection mode for follow-up
-        structured_settings["__function_selection_mode__"] = False
-
-        # Prepare working directory BEFORE assembling prompt (which creates files)
-        self._prepare_working_directory(structured_settings)
-
-        output_tools = (
-            model_request_parameters.output_tools if model_request_parameters else []
-        )
-
-        # Build structured output instruction
-        system_prompt_parts = []
-
-        if model_request_parameters and hasattr(
-            model_request_parameters, "system_prompt"
-        ):
-            sp = getattr(model_request_parameters, "system_prompt", None)
-            if sp:
-                system_prompt_parts.append(sp)
-
-        if output_tools:
-            structured_instruction = self._build_structured_output_instruction(
-                output_tools[0], structured_settings
-            )
-            system_prompt_parts.append(structured_instruction)
-
-        structured_prompt = self._assemble_final_prompt(
-            messages,
-            system_prompt_parts,
-            structured_settings,
-            has_tool_results=False,
-        )
-
-        logger.debug(
-            "Making structured request with prompt length: %d",
-            len(structured_prompt),
-        )
-        structured_response = await run_claude_async(
-            structured_prompt, settings=structured_settings
-        )
-
-        return self._convert_response(
-            structured_response,
-            output_tools=output_tools,
-            function_tools=[],
-            settings=structured_settings,
-        )
-
-    async def _handle_unstructured_follow_up(
-        self,
-        messages: list[ModelMessage],
-        model_request_parameters: ModelRequestParameters,
-        original_settings: ClaudeCodeSettings | None = None,
-    ) -> ModelResponse:
-        """Handle unstructured follow-up request when function selection is 'none'.
-
-        Args:
-            messages: Original message list
-            model_request_parameters: Request parameters
-            original_settings: Original settings from initial request (to preserve additional_files, etc.)
-
-        Returns:
-            Model response with unstructured output
-        """
-        logger.info(
-            "Function selection was 'none', making follow-up unstructured request"
-        )
-
-        unstructured_settings = self.provider.get_settings(model=self._model_name)
-
-        # Preserve user-provided settings from original request
-        self._preserve_user_settings(original_settings, unstructured_settings)
-
-        # Disable function selection mode for follow-up
-        unstructured_settings["__function_selection_mode__"] = False
-
-        # Prepare working directory BEFORE assembling prompt (which creates files)
-        self._prepare_working_directory(unstructured_settings)
-
-        system_prompt_parts = []
-
-        if model_request_parameters and hasattr(
-            model_request_parameters, "system_prompt"
-        ):
-            sp = getattr(model_request_parameters, "system_prompt", None)
-            if sp:
-                system_prompt_parts.append(sp)
-
-        unstructured_instruction = self._build_unstructured_output_instruction(
-            unstructured_settings
-        )
-        system_prompt_parts.append(unstructured_instruction)
-
-        unstructured_prompt = self._assemble_final_prompt(
-            messages, system_prompt_parts, unstructured_settings, has_tool_results=False
-        )
-
-        logger.debug(
-            "Making unstructured request with prompt length: %d",
-            len(unstructured_prompt),
-        )
-        unstructured_response = await run_claude_async(
-            unstructured_prompt, settings=unstructured_settings
-        )
-
-        return self._convert_response(
-            unstructured_response,
-            output_tools=[],
-            function_tools=[],
-            settings=unstructured_settings,
-        )
-
-    def _build_retry_prompt(
-        self,
-        messages: list[ModelMessage],
-        schema: dict[str, Any],
-        arg_settings: ClaudeCodeSettings,
-        error_msg: str,
-    ) -> str:
-        """Build prompt for retry attempt after validation error.
-
-        Args:
-            messages: Original message list
-            schema: JSON schema for function parameters
-            arg_settings: Settings dict (will be modified with new temp directory)
-            error_msg: Error message from previous attempt
-
-        Returns:
-            Retry prompt string
-        """
-        # Generate new temp directory for retry in working directory
-        working_dir = arg_settings.get("__working_directory", "/tmp")
-        temp_data_dir = generate_temp_directory_path(
-            working_dir, "claude_data_structure", short_id=True
-        )
-        arg_settings["__temp_json_dir"] = temp_data_dir
-
-        # Extract tool name and description from settings (stored during initial setup)
-        tool_name: str | None = arg_settings.get("__tool_name")
-        tool_description: str | None = arg_settings.get("__tool_description")
-
-        # Rebuild instruction with new temp directory and function context
-        instruction = self._build_argument_collection_instruction(
-            schema, arg_settings, tool_name, tool_description
-        )
-
-        retry_instruction = f"""
-PREVIOUS ATTEMPT HAD ERRORS:
-{error_msg}
-
-Please fix the issues above and try again. Follow the directory structure instructions carefully."""
-
-        # Write user messages to user_request.md
-        formatted_messages = format_messages_for_claude(
-            messages, skip_system_prompt=True, working_dir=working_dir
-        )
-        user_request_path = Path(working_dir) / "user_request.md"
-        user_request_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(user_request_path, "w", encoding="utf-8") as f:
-            f.write(formatted_messages)
-        logger.debug("Wrote user messages for retry to: %s", user_request_path)
-
-        return f"{instruction}\n\n{retry_instruction}"
-
-    async def _try_collect_arguments(
-        self,
-        current_prompt: str,
-        arg_settings: ClaudeCodeSettings,
-        selected_function: str,
-        schema: dict[str, Any],
-    ) -> tuple[ModelResponse | None, str | None, ClaudeJSONResponse]:
-        """Try to collect arguments for selected function.
-
-        Args:
-            current_prompt: Prompt to send to Claude
-            arg_settings: Settings for argument collection
-            selected_function: Name of selected function
-            schema: JSON schema for function parameters
-
-        Returns:
-            Tuple of (model_response, error_msg, claude_response).
-            model_response is not None on success, error_msg is not None on retriable error.
-        """
-        arg_response = await run_claude_async(current_prompt, settings=arg_settings)
-
-        # Read structured output from directory structure
-        structured_file = arg_settings.get("__structured_output_file")
-        if structured_file:
-            parsed_args, error_msg = self._read_structured_output_file(
-                structured_file, schema, arg_settings
-            )
-
-            if parsed_args:
-                logger.info(
-                    "Successfully collected arguments for %s: %s",
-                    selected_function,
-                    parsed_args,
-                )
-                tool_call = create_tool_call_part(
-                    tool_name=str(selected_function),
-                    args=parsed_args,
-                )
-                return (
-                    self._create_model_response_with_usage(arg_response, [tool_call]),
-                    None,
-                    arg_response,
-                )
-
-            return None, error_msg, arg_response
-
-        return None, None, arg_response
-
-    def _setup_argument_collection(
-        self,
-        messages: list[ModelMessage],
-        selected_function: str,
-        available_functions: dict[str, Any],
-        arg_response_for_usage: ClaudeJSONResponse,
-        original_settings: ClaudeCodeSettings | None = None,
-    ) -> tuple[ModelResponse | None, ClaudeCodeSettings, dict[str, Any], str]:
-        """Set up argument collection by validating function and building initial prompt.
-
-        Args:
-            messages: Original message list
-            selected_function: Name of selected function
-            available_functions: Dict of available function definitions
-            arg_response_for_usage: Response to extract usage from
-            original_settings: Original settings from initial request (to preserve additional_files, etc.)
-
-        Returns:
-            Tuple of (error_response, arg_settings, schema, arg_prompt).
-            If error_response is not None, return it immediately.
-        """
-        logger.info(
-            "Function '%s' was selected, collecting arguments", selected_function
-        )
-
-        tool_def = available_functions.get(selected_function)
-        if not tool_def:
-            return (
-                self._create_model_response_with_usage(
-                    arg_response_for_usage,
-                    [
-                        TextPart(
-                            content=f"Error: Function '{selected_function}' not found"
-                        )
-                    ],
-                ),
-                {},
-                {},
-                "",
-            )
-
-        arg_settings = self.provider.get_settings(model=self._model_name)
-
-        # Preserve user-provided settings from original request
-        self._preserve_user_settings(original_settings, arg_settings)
-
-        schema = tool_def.parameters_json_schema
-
-        # Store tool name and description for retry attempts
-        arg_settings["__tool_name"] = tool_def.name
-        arg_settings["__tool_description"] = tool_def.description
-
-        # Determine working directory early for argument collection
-        working_dir = _determine_working_directory(arg_settings)
-        arg_settings["__working_directory"] = working_dir
-
-        # Build initial prompt with function context
-        instruction = self._build_argument_collection_instruction(
-            schema, arg_settings, tool_def.name, tool_def.description
-        )
-
-        # Format messages and write to user_request.md
-        formatted_messages = format_messages_for_claude(
-            messages, skip_system_prompt=True, working_dir=working_dir
-        )
-        user_request_path = Path(working_dir) / "user_request.md"
-        user_request_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(user_request_path, "w", encoding="utf-8") as f:
-            f.write(formatted_messages)
-        logger.debug("Wrote user messages to: %s", user_request_path)
-
-        # Build prompt with just the instruction (references user_request.md)
-        arg_prompt = instruction
-
-        existing_prompt = arg_settings.get("append_system_prompt")
-        if existing_prompt:
-            arg_prompt = f"{existing_prompt}\n\n{arg_prompt}"
-            arg_settings.pop("append_system_prompt", None)
-
-        return None, arg_settings, schema, arg_prompt
-
-    def _log_argument_collection_attempt(
-        self, attempt: int, max_retries: int, prompt: str, is_retry: bool
-    ) -> None:
-        """Log argument collection attempt details."""
-        if is_retry:
-            logger.info(
-                "Retrying argument collection (attempt %d/%d) after validation error",
-                attempt + 1,
-                max_retries + 1,
-            )
-            logger.info("=" * 80)
-            logger.info("RETRY PROMPT - length: %d", len(prompt))
-        else:
-            logger.info("=" * 80)
-            logger.info("PHASE 2: ARGUMENT COLLECTION - Prompt length: %d", len(prompt))
-        logger.info("=" * 80)
-        logger.info("%s", prompt)
-        logger.info("=" * 80)
-
-    def _log_argument_collection_result(
-        self, model_response: ModelResponse | None, error_msg: str | None
-    ) -> None:
-        """Log argument collection result."""
-        logger.info("=" * 80)
-        logger.info("PHASE 2: ARGUMENT COLLECTION RESULT")
-        logger.info("=" * 80)
-        if model_response and model_response.parts:
-            first_part = model_response.parts[0]
-            if isinstance(first_part, ToolCallPart):
-                logger.info("Success! Extracted args: %s", first_part.args)
-            else:
-                logger.info("Success! Part type: %s", type(first_part).__name__)
-        if error_msg:
-            logger.info("Error: %s", error_msg)
-        logger.info("=" * 80)
-
-    async def _handle_argument_collection(
-        self,
-        messages: list[ModelMessage],
-        selected_function: str,
-        available_functions: dict[str, Any],
-        arg_response_for_usage: ClaudeJSONResponse,
-        original_settings: ClaudeCodeSettings | None = None,
-    ) -> ModelResponse:
-        """Handle argument collection for selected function using file/folder structure.
-
-        Args:
-            messages: Original message list
-            selected_function: Name of selected function
-            available_functions: Dict of available function definitions
-            arg_response_for_usage: Response to extract usage from
-            original_settings: Original settings from initial request (to preserve additional_files, etc.)
-
-        Returns:
-            Model response with tool call or error
-        """
-        error_response, arg_settings, schema, arg_prompt = (
-            self._setup_argument_collection(
-                messages,
-                selected_function,
-                available_functions,
-                arg_response_for_usage,
-                original_settings,
-            )
-        )
-
-        if error_response:
-            return error_response
-
-        max_retries = 1
-        error_msg = None
-
-        for attempt in range(max_retries + 1):
-            if attempt == 0:
-                current_prompt = arg_prompt
-                self._log_argument_collection_attempt(
-                    attempt, max_retries, current_prompt, False
-                )
-            else:
-                current_prompt = self._build_retry_prompt(
-                    messages, schema, arg_settings, error_msg or ""
-                )
-                self._log_argument_collection_attempt(
-                    attempt, max_retries, current_prompt, True
-                )
-
-            model_response, error_msg, arg_response = await self._try_collect_arguments(
-                current_prompt,
-                arg_settings,
-                selected_function,
-                schema,
-            )
-
-            if model_response or error_msg:
-                self._log_argument_collection_result(model_response, error_msg)
-
-            if model_response:
-                return model_response
-
-            # If error and not last attempt, retry
-            if error_msg and attempt < max_retries:
-                logger.warning(
-                    "Argument extraction failed (attempt %d/%d): %s",
-                    attempt + 1,
-                    max_retries + 1,
-                    error_msg,
-                )
-                continue
-
-            # Last attempt failed, return error to user
-            if error_msg:
-                logger.error(
-                    "Argument extraction failed after %d attempts: %s",
-                    attempt + 1,
-                    error_msg,
-                )
-                return self._create_model_response_with_usage(
-                    arg_response,
-                    [TextPart(content=error_msg)],
-                )
-
-        # Fallback to error if file reading failed
-        result_text = arg_response.get("result", "")
-        error_msg = (
-            f"Could not interpret the parameters from response: {result_text[:500]}"
-        )
-        return self._create_model_response_with_usage(
-            arg_response,
-            [TextPart(content=error_msg)],
-        )
-
-    async def _run_and_log_claude_request(
-        self, prompt: str, settings: ClaudeCodeSettings
-    ) -> ClaudeJSONResponse:
-        """Run Claude CLI with full logging."""
-        logger.info("=" * 80)
-        logger.info("FULL PROMPT BEING SENT TO CLAUDE:")
-        logger.info("=" * 80)
-        logger.info("%s", prompt)
-        logger.info("=" * 80)
-        response = await run_claude_async(prompt, settings=settings)
-        logger.info("=" * 80)
-        logger.info("CLAUDE RESPONSE:")
-        logger.info("=" * 80)
-        logger.info("%s", json.dumps(response, indent=2))
-        logger.info("=" * 80)
-        return response
-
-    def _build_argument_collection_instruction(
-        self,
-        schema: dict[str, Any],
-        settings: ClaudeCodeSettings,
-        tool_name: str | None = None,
-        tool_description: str | None = None,
-    ) -> str:
-        """Build instruction for argument collection using file/folder structure.
-
-        This reuses the structured output approach that has proven reliable.
-
-        Args:
-            schema: JSON schema for function parameters
-            settings: Settings dict to store file paths
-            tool_name: Name of the function/tool
-            tool_description: Description of what the function does
-
-        Returns:
-            Instruction string with file/folder structure
-        """
-        # Generate unique filename and temp dir (same as structured output) in working directory
-        working_dir = settings.get("__working_directory", "/tmp")
-        output_filename = generate_output_file_path(
-            working_dir, "claude_structured_output", ".json"
-        )
-        settings["__structured_output_file"] = output_filename
-
-        temp_data_dir = generate_temp_directory_path(
-            working_dir, "claude_data_structure", short_id=True
-        )
-        settings["__temp_json_dir"] = temp_data_dir
-
-        logger.debug("Argument collection will use temp directory: %s", temp_data_dir)
-
-        # Use new structure converter to build instructions with function context
-        return build_structure_instructions(
-            schema, temp_data_dir, tool_name, tool_description
-        )
-
-    async def _handle_function_selection_followup(
-        self,
-        messages: list[ModelMessage],
-        model_request_parameters: ModelRequestParameters,
-        settings: ClaudeCodeSettings,
-        response: ClaudeJSONResponse,
-        result: ModelResponse,
-    ) -> ModelResponse:
-        """Handle function selection follow-up routing.
-
-        Args:
-            messages: Original message list
-            model_request_parameters: Request parameters (contains output_tools and function_tools)
-            settings: Settings dict with function selection state
-            response: Raw CLI response
-            result: Converted model response
-
-        Returns:
-            Final model response (may be from follow-up request)
-        """
-        function_tools = (
-            model_request_parameters.function_tools if model_request_parameters else []
-        )
-        output_tools = (
-            model_request_parameters.output_tools if model_request_parameters else []
-        )
-
-        logger.debug(
-            "After _convert_response: function_tools=%s, __function_selection_mode__=%s, result.parts=%s",
-            bool(function_tools),
-            settings.get("__function_selection_mode__"),
-            [type(p).__name__ for p in result.parts],
-        )
-
-        # Handle function selection results using settings-based control flow
-        # (more reliable than string matching in response text)
-        if not (function_tools and settings.get("__function_selection_mode__")):
-            return result
-
-        selection_result = settings.get("__function_selection_result__")
-
-        if selection_result == "none":
-            # Model chose not to call any function - make follow-up request
-            # with appropriate output format (structured or unstructured)
-            if output_tools:
-                logger.info(
-                    "Function selection 'none' with structured output - "
-                    "making structured follow-up request"
-                )
-                return await self._handle_structured_follow_up(
-                    messages, model_request_parameters, settings
-                )
-            else:
-                logger.info(
-                    "Function selection 'none' with unstructured output - "
-                    "making unstructured follow-up request"
-                )
-                return await self._handle_unstructured_follow_up(
-                    messages, model_request_parameters, settings
-                )
-
-        elif selection_result == "selected":
-            # Model selected a function - collect arguments
-            selected_function = settings.get("__selected_function__")
-            if selected_function:
-                available_functions = settings.get("__available_functions__", {})
-                if isinstance(available_functions, dict):
-                    logger.info(
-                        "Function selected: %s - collecting arguments",
-                        selected_function,
-                    )
-                    return await self._handle_argument_collection(
-                        messages,
-                        selected_function,
-                        available_functions,
-                        response,
-                        settings,
-                    )
-        # Unexpected or missing selection result
-        elif selection_result is not None:
-            logger.warning(
-                "Unexpected function selection result: %s "
-                "(expected 'none' or 'selected')",
-                selection_result,
-            )
-
-        return result
 
     async def request(
         self,
@@ -1142,38 +547,22 @@ Please fix the issues above and try again. Follow the directory structure instru
 
         Args:
             messages: List of messages in the conversation
-            model_settings: Optional model settings from Agent (can include timeout_seconds, etc.)
+            model_settings: Optional model settings from Agent (can include timeout_seconds, hooks, etc.)
             model_request_parameters: Model request parameters
 
         Returns:
             Model response with embedded usage information
         """
         logger.info(
-            "Starting non-streaming request with %d messages, "
-            "output_tools=%s, function_tools=%s",
+            "Starting non-streaming request with %d messages",
             len(messages),
-            (
-                len(model_request_parameters.output_tools)
-                if model_request_parameters and model_request_parameters.output_tools
-                else 0
-            ),
-            (
-                len(model_request_parameters.function_tools)
-                if model_request_parameters and model_request_parameters.function_tools
-                else 0
-            ),
         )
 
-        # Get settings from provider and merge with model_settings from pydantic_ai
-        settings = self.provider.get_settings(model=self._model_name)
-        if model_settings:
-            # Merge model_settings into provider settings (model_settings takes precedence)
-            settings.update(model_settings)  # type: ignore[typeddict-item]
+        # Build options by merging all settings sources
+        settings = self._build_options(model_settings, model_request_parameters)
 
-        # Determine working directory early so prompt building can use it
-        working_dir = _determine_working_directory(settings)
-        settings["__working_directory"] = working_dir
-        logger.debug("Pre-determined working directory: %s", working_dir)
+        # Determine working directory early
+        self._prepare_working_directory(settings)
 
         output_tools = (
             model_request_parameters.output_tools if model_request_parameters else []
@@ -1192,13 +581,13 @@ Please fix the issues above and try again. Follow the directory structure instru
             settings,
         )
 
-        # Assemble final prompt with system instructions
+        # Assemble final prompt
         prompt = self._assemble_final_prompt(
             messages, system_prompt_parts, settings, has_tool_results
         )
 
         # Run Claude CLI and convert response
-        response = await self._run_and_log_claude_request(prompt, settings)
+        response = await run_claude_async(prompt, settings=settings)
         result = self._convert_response(
             response,
             output_tools=output_tools,
@@ -1223,43 +612,17 @@ Please fix the issues above and try again. Follow the directory structure instru
         model_request_parameters: ModelRequestParameters,
         run_context: Any | None = None,
     ) -> AsyncIterator[StreamedResponse]:
-        """Make a streaming request to Claude Code CLI.
-
-        Args:
-            messages: List of messages in the conversation
-            model_settings: Optional model settings from Agent (can include timeout_seconds, etc.)
-            model_request_parameters: Model request parameters
-            run_context: Optional run context
-
-        Yields:
-            Streamed response object
-        """
+        """Make a streaming request to Claude Code CLI."""
         logger.info(
-            "Starting streaming request with %d messages, "
-            "output_tools=%s, function_tools=%s",
+            "Starting streaming request with %d messages",
             len(messages),
-            (
-                len(model_request_parameters.output_tools)
-                if model_request_parameters and model_request_parameters.output_tools
-                else 0
-            ),
-            (
-                len(model_request_parameters.function_tools)
-                if model_request_parameters and model_request_parameters.function_tools
-                else 0
-            ),
         )
 
-        # Get settings from provider and merge with model_settings from pydantic_ai
-        settings = self.provider.get_settings(model=self._model_name)
-        if model_settings:
-            # Merge model_settings into provider settings (model_settings takes precedence)
-            settings.update(model_settings)  # type: ignore[typeddict-item]
+        # Build options by merging all settings sources
+        settings = self._build_options(model_settings, model_request_parameters)
 
-        # Determine working directory early so prompt building can use it
-        working_dir = _determine_working_directory(settings)
-        settings["__working_directory"] = working_dir
-        logger.debug("Pre-determined working directory: %s", working_dir)
+        # Determine working directory early
+        self._prepare_working_directory(settings)
 
         output_tools = (
             model_request_parameters.output_tools if model_request_parameters else []
@@ -1271,20 +634,17 @@ Please fix the issues above and try again. Follow the directory structure instru
         # Streaming is only supported for plain text responses
         if output_tools:
             raise ValueError(
-                "Streaming is not supported with structured output (output_tools). "
-                "Structured output requires file-based JSON construction which is incompatible with streaming."
+                "Streaming is not supported with structured output (output_tools)."
             )
         if function_tools:
             raise ValueError(
-                "Streaming is not supported with function tools. "
-                "Function calling requires file-based argument collection which is incompatible with streaming."
+                "Streaming is not supported with function tools."
             )
 
-        # Check if we have tool results in the conversation
+        # Check if we have tool results
         has_tool_results = self._check_has_tool_results(messages)
 
-        # Build system prompt with appropriate instructions
-        # Pass is_streaming=True to skip file writing instructions
+        # Build system prompt
         system_prompt_parts = self._build_system_prompt_parts(
             model_request_parameters,
             has_tool_results,
@@ -1292,12 +652,12 @@ Please fix the issues above and try again. Follow the directory structure instru
             is_streaming=True,
         )
 
-        # Assemble final prompt with system instructions
+        # Assemble final prompt
         prompt = self._assemble_final_prompt(
             messages, system_prompt_parts, settings, has_tool_results
         )
 
-        # Add streaming marker instruction and user request reference
+        # Add streaming marker
         streaming_marker = "<<<STREAM_START>>>"
         prompt = f"""Begin with the marker "{streaming_marker}" on its own line, then provide your response.
 
@@ -1306,9 +666,7 @@ Use the Read tool to read `user_request.md` for the user's request.
 {prompt}"""
         settings["__streaming_marker__"] = streaming_marker  # type: ignore[typeddict-unknown-key]
 
-        # Setup working directory for streaming (using shared helper)
-        from .utils import _setup_working_directory_and_prompt
-
+        # Setup working directory
         cwd = _setup_working_directory_and_prompt(prompt, settings)
 
         # Build command and create event stream
@@ -1318,7 +676,7 @@ Use the Read tool to read `user_request.md` for the user's request.
         # Create and yield streaming response
         streamed_response = ClaudeCodeStreamedResponse(
             model_request_parameters=model_request_parameters,
-            model_name=f"claude-code:{self._model_name}",
+            model_name=f"claude-code:{self._model_alias}",
             event_stream=event_stream,
             timestamp=datetime.now(timezone.utc),
             streaming_marker=streaming_marker,
@@ -1326,84 +684,46 @@ Use the Read tool to read `user_request.md` for the user's request.
 
         yield streamed_response
 
+    # ===== Response Handling Methods =====
+
     def _handle_function_selection_response(
         self,
         result_text: str,
         response: ClaudeJSONResponse,
         settings: ClaudeCodeSettings,
     ) -> ModelResponse:
-        """Handle function selection mode response parsing.
+        """Handle function selection mode response parsing."""
+        import re
 
-        Args:
-            result_text: Response text from Claude
-            response: Full Claude response for usage extraction
-            settings: Settings dict (will be modified with selected function)
-
-        Returns:
-            ModelResponse with function selection result
-        """
-        logger.debug("Function selection response text: %s", result_text[:500])
-
-        # Get available function names for validation
         available_functions = settings.get("__available_functions__", {})
         if isinstance(available_functions, dict):
             valid_options = [name.lower() for name in available_functions] + ["none"]
         else:
             valid_options = ["none"]
 
-        # Look for "CHOICE:" format - handle markdown bold/italic formatting and multiple choices
-        matched_option = None
-        import re
-
-        # Extract ALL CHOICE lines using findall (handles multiple tool selection)
+        # Extract CHOICE lines
         choice_matches = re.findall(
             r"CHOICE:\s*[\*_]*(\w+)[\*_]*", result_text, re.IGNORECASE
         )
 
+        matched_option = None
         if choice_matches:
-            # Validate all extracted choices
             valid_choices = [
                 c.strip().lower()
                 for c in choice_matches
                 if c.strip().lower() in valid_options
             ]
-
             if valid_choices:
-                # Take the FIRST valid choice for THIS iteration
                 matched_option = valid_choices[0]
 
-                # Log if multiple functions were identified
-                if len(valid_choices) > 1:
-                    logger.info(
-                        "Multiple functions identified: %s. Processing '%s' first. "
-                        "Agent will handle remaining tools in subsequent iterations.",
-                        ", ".join(valid_choices),
-                        matched_option,
-                    )
-
         if matched_option:
-            logger.debug(
-                "Function selection result: selected_function=%s", matched_option
-            )
-
             parts: list[TextPart | ToolCallPart] = []
             if matched_option == "none":
-                # Claude chose to answer directly
-                logger.info(
-                    "Function selection returned 'none' - will proceed to final response"
-                )
-                # Store the selection in settings for reliable control flow
                 settings["__function_selection_result__"] = "none"
                 parts.append(
                     TextPart(content="[Function selection: none - answering directly]")
                 )
             else:
-                # Claude selected a function - signal needs argument collection
-                logger.info(
-                    "Function selected: %s - will trigger argument collection",
-                    matched_option,
-                )
-                # Store selected function for next request
                 settings["__selected_function__"] = matched_option
                 settings["__function_selection_result__"] = "selected"
                 parts.append(
@@ -1414,10 +734,7 @@ Use the Read tool to read `user_request.md` for the user's request.
 
             return self._create_model_response_with_usage(response, parts)
 
-        # Could not parse option selection
-        logger.error(
-            "Could not parse function selection from response: %s", result_text[:200]
-        )
+        # Could not parse
         parts = [
             TextPart(
                 content=f"Error: Could not parse option selection. Response: {result_text}"
@@ -1432,23 +749,12 @@ Use the Read tool to read `user_request.md` for the user's request.
         output_tools: list[Any],
         settings: ClaudeCodeSettings | None,
     ) -> ModelResponse:
-        """Handle structured output response via tool call.
-
-        Args:
-            result_text: Response text from Claude
-            response: Full Claude response for usage extraction
-            output_tools: List of output tool definitions
-            settings: Settings dict
-
-        Returns:
-            ModelResponse with tool call or error text
-        """
+        """Handle structured output response via tool call."""
         output_tool = output_tools[0]
         tool_name = output_tool.name
         schema = output_tool.parameters_json_schema
 
         try:
-            # Check if Claude created a structured output file
             structured_file = (
                 settings.get("__structured_output_file") if settings else None
             )
@@ -1459,24 +765,18 @@ Use the Read tool to read `user_request.md` for the user's request.
                 )
 
                 if error_msg:
-                    # Return error as text so Pydantic AI can retry
                     return self._create_model_response_with_usage(
                         response, [TextPart(content=error_msg)]
                     )
 
                 if parsed_data:
-                    # Validation passed, create tool call
-                    logger.debug("Successfully created structured output from file")
                     tool_call = create_tool_call_part(
                         tool_name=tool_name,
                         args=parsed_data,
                     )
                     return self._create_model_response_with_usage(response, [tool_call])
 
-                # No file found, use fallback extraction
-                logger.warning(
-                    "Structured output file not found, using fallback JSON extraction"
-                )
+                # No file found, use fallback
                 parsed_data = self._extract_json_robust(result_text, schema)
                 tool_call = create_tool_call_part(
                     tool_name=tool_name,
@@ -1484,10 +784,7 @@ Use the Read tool to read `user_request.md` for the user's request.
                 )
                 return self._create_model_response_with_usage(response, [tool_call])
 
-            # Fallback: Use robust extraction with multiple strategies
-            logger.debug(
-                "No structured output file configured, using robust JSON extraction"
-            )
+            # Fallback
             parsed_data = self._extract_json_robust(result_text, schema)
             tool_call = create_tool_call_part(
                 tool_name=tool_name,
@@ -1495,10 +792,7 @@ Use the Read tool to read `user_request.md` for the user's request.
             )
             return self._create_model_response_with_usage(response, [tool_call])
 
-        except json.JSONDecodeError as e:
-            # If JSON parsing fails, return as text
-            # Pydantic AI will retry with validation error
-            logger.error("Failed to parse structured output JSON: %s", e)
+        except json.JSONDecodeError:
             return self._create_model_response_with_usage(
                 response, [TextPart(content=result_text)]
             )
@@ -1509,19 +803,7 @@ Use the Read tool to read `user_request.md` for the user's request.
         response: ClaudeJSONResponse,
         settings: ClaudeCodeSettings | None,
     ) -> ModelResponse:
-        """Handle unstructured text output response.
-
-        Args:
-            result_text: Response text from Claude
-            response: Full Claude response for usage extraction
-            settings: Settings dict
-
-        Returns:
-            ModelResponse with text content
-        """
-        logger.debug("Processing unstructured output")
-
-        # Check if we instructed Claude to write to a file
+        """Handle unstructured text output response."""
         unstructured_file_obj = (
             settings.get("__unstructured_output_file") if settings else None
         )
@@ -1530,33 +812,17 @@ Use the Read tool to read `user_request.md` for the user's request.
         )
 
         if unstructured_file and Path(unstructured_file).exists():
-            # Read content from file that Claude created
             try:
-                logger.debug(
-                    "Reading unstructured output from file: %s", unstructured_file
-                )
                 with open(unstructured_file, encoding="utf-8") as f:
                     file_content = f.read()
-                logger.debug(
-                    "Successfully read %d bytes from unstructured output file",
-                    len(file_content),
-                )
                 return self._create_model_response_with_usage(
                     response, [TextPart(content=file_content)]
                 )
-            except Exception as e:
-                # Fallback to CLI response if file read fails
-                logger.warning(
-                    "Failed to read unstructured output file, using CLI response: %s", e
-                )
+            except Exception:
                 return self._create_model_response_with_usage(
                     response, [TextPart(content=result_text)]
                 )
 
-        # Fallback to CLI response if no file
-        if unstructured_file:
-            logger.warning("Unstructured output file not found: %s", unstructured_file)
-        logger.debug("Using CLI response text for unstructured output")
         return self._create_model_response_with_usage(
             response, [TextPart(content=result_text)]
         )
@@ -1568,184 +834,308 @@ Use the Read tool to read `user_request.md` for the user's request.
         function_tools: list[Any] | None = None,
         settings: ClaudeCodeSettings | None = None,
     ) -> ModelResponse:
-        """Convert Claude JSON response to ModelResponse.
-
-        Args:
-            response: Claude CLI JSON response
-            output_tools: Optional output tool definitions for structured output
-            function_tools: Optional function tool definitions for tool calling
-            settings: Settings that may contain structured output file path
-
-        Returns:
-            Pydantic AI ModelResponse with embedded usage
-        """
-        # Extract result text
+        """Convert Claude JSON response to ModelResponse."""
         result_text = response.get("result", "")
 
-        # Check for function selection mode
         if function_tools and settings and settings.get("__function_selection_mode__"):
             return self._handle_function_selection_response(
                 result_text, response, settings
             )
 
-        # Check for structured output
         if output_tools and len(output_tools) > 0:
             return self._handle_structured_output_response(
                 result_text, response, output_tools, settings
             )
 
-        # Default to unstructured output
         return self._handle_unstructured_output_response(
             result_text, response, settings
         )
 
-    def _cleanup_temp_file(self, file_path: str | Path) -> None:
-        """Safely remove temporary file.
+    # ===== Function Selection Follow-up Methods =====
 
-        Args:
-            file_path: Path to file to remove
-        """
-        with suppress(Exception):
-            Path(file_path).unlink()
-
-    def _validate_json_schema(
-        self, data: dict[str, Any], schema: dict[str, Any]
-    ) -> str | None:
-        """Validate JSON data against schema.
-
-        Args:
-            data: JSON data to validate
-            schema: JSON schema to validate against
-
-        Returns:
-            Error message if validation fails, None if valid
-        """
-        # Check required fields
-        required_fields = schema.get("required", [])
-        missing_fields = [field for field in required_fields if field not in data]
-
-        if missing_fields:
-            return f"Please provide: {', '.join(missing_fields)}\nCurrent content: {json.dumps(data)}"
-
-        # Validate field types
-        properties = schema.get("properties", {})
-        for field_name, field_schema in properties.items():
-            if field_name in data:
-                expected_type = field_schema.get("type")
-                actual_value = data[field_name]
-
-                # Type checking
-                type_valid = True
-                if (
-                    expected_type == "string"
-                    and not isinstance(actual_value, str)
-                    or expected_type == "integer"
-                    and not isinstance(actual_value, int)
-                    or expected_type == "number"
-                    and not isinstance(actual_value, (int, float))
-                    or expected_type == "boolean"
-                    and not isinstance(actual_value, bool)
-                    or expected_type == "array"
-                    and not isinstance(actual_value, list)
-                    or expected_type == "object"
-                    and not isinstance(actual_value, dict)
-                ):
-                    type_valid = False
-
-                if not type_valid:
-                    return f"The value for '{field_name}' should be a {expected_type}, but it's a {type(actual_value).__name__}\nCurrent content: {json.dumps(data)}"
-
-        return None
-
-    def _try_read_directory_structure(
+    async def _handle_function_selection_followup(
         self,
-        settings: ClaudeCodeSettings | None,
-        schema: dict[str, Any],
-    ) -> tuple[dict[str, Any] | None, str | None]:
-        """Try to read JSON from directory structure.
+        messages: list[ModelMessage],
+        model_request_parameters: ModelRequestParameters,
+        settings: ClaudeCodeSettings,
+        response: ClaudeJSONResponse,
+        result: ModelResponse,
+    ) -> ModelResponse:
+        """Handle function selection follow-up routing."""
+        function_tools = (
+            model_request_parameters.function_tools if model_request_parameters else []
+        )
+        output_tools = (
+            model_request_parameters.output_tools if model_request_parameters else []
+        )
 
-        Args:
-            settings: Settings that may contain temp directory path
-            schema: JSON schema to validate against
+        if not (function_tools and settings.get("__function_selection_mode__")):
+            return result
 
-        Returns:
-            Tuple of (parsed_data, error_message). One will be None.
-        """
-        temp_json_dir = settings.get("__temp_json_dir") if settings else None
-        if not temp_json_dir or not isinstance(temp_json_dir, str):
-            return None, None
+        selection_result = settings.get("__function_selection_result__")
 
-        temp_path = Path(temp_json_dir)
+        if selection_result == "none":
+            if output_tools:
+                return await self._handle_structured_follow_up(
+                    messages, model_request_parameters, settings
+                )
+            else:
+                return await self._handle_unstructured_follow_up(
+                    messages, model_request_parameters, settings
+                )
 
-        # Check if directory exists (no need for completion marker since CLI execution is synchronous)
-        if not temp_path.exists():
-            return None, None
+        elif selection_result == "selected":
+            selected_function = settings.get("__selected_function__")
+            if selected_function:
+                available_functions = settings.get("__available_functions__", {})
+                if isinstance(available_functions, dict):
+                    return await self._handle_argument_collection(
+                        messages,
+                        selected_function,
+                        available_functions,
+                        response,
+                        settings,
+                    )
 
-        logger.debug("Found temp directory structure at: %s", temp_path)
+        return result
 
-        try:
-            # Use new structure converter to read and validate
-            parsed_data = read_structure_from_filesystem(schema, temp_path)
-            logger.debug("Successfully read JSON from directory structure")
-            return parsed_data, None
-
-        except RuntimeError as e:
-            # RuntimeError contains user-friendly error messages from converter
-            logger.error("Failed to read directory structure: %s", e)
-            return None, str(e)
-        except Exception as e:
-            logger.error("Unexpected error reading directory: %s", e)
-            return None, f"Could not read the data structure: {e}"
-
-    def _try_read_json_file(
+    async def _handle_structured_follow_up(
         self,
-        file_path: str,
-        schema: dict[str, Any],
-    ) -> tuple[dict[str, Any] | None, str | None]:
-        """Try to read and parse JSON from file.
+        messages: list[ModelMessage],
+        model_request_parameters: ModelRequestParameters,
+        original_settings: ClaudeCodeSettings | None = None,
+    ) -> ModelResponse:
+        """Handle structured follow-up request when function selection is 'none'."""
+        settings = self._build_options(None, model_request_parameters)
 
-        Args:
-            file_path: Path to JSON file
-            schema: JSON schema to validate against
+        # Preserve user-provided settings
+        if original_settings:
+            for key in ["additional_files", "timeout_seconds", "debug_save_prompts"]:
+                if key in original_settings:
+                    settings[key] = original_settings[key]
 
-        Returns:
-            Tuple of (parsed_data, error_message). One will be None.
-        """
-        if not Path(file_path).exists():
-            logger.debug("Structured output file not found: %s", file_path)
-            return None, None
+        settings["__function_selection_mode__"] = False
+        self._prepare_working_directory(settings)
 
-        logger.debug("Reading structured output file: %s", file_path)
+        output_tools = (
+            model_request_parameters.output_tools if model_request_parameters else []
+        )
 
-        # Read file
-        try:
-            with open(file_path, encoding="utf-8") as f:
-                file_content = f.read()
-            logger.debug("Read %d bytes from structured output file", len(file_content))
-        except Exception as e:
-            logger.error("Failed to read structured output file: %s", e)
-            return None, f"Failed to read file: {e}"
+        system_prompt_parts = []
+        if model_request_parameters and hasattr(model_request_parameters, "system_prompt"):
+            sp = getattr(model_request_parameters, "system_prompt", None)
+            if sp:
+                system_prompt_parts.append(sp)
 
-        # Parse JSON
-        try:
-            parsed_data = json.loads(file_content)
-            logger.debug("Successfully parsed JSON from structured output file")
-        except json.JSONDecodeError as e:
-            logger.error("Invalid JSON in structured output file: %s", e)
-            return (
-                None,
-                f"The file content isn't formatted correctly: {e}\nFile content:\n{file_content}",
+        if output_tools:
+            structured_instruction = self._build_structured_output_instruction(
+                output_tools[0], settings
+            )
+            system_prompt_parts.append(structured_instruction)
+
+        prompt = self._assemble_final_prompt(
+            messages, system_prompt_parts, settings, has_tool_results=False
+        )
+
+        response = await run_claude_async(prompt, settings=settings)
+        return self._convert_response(
+            response,
+            output_tools=output_tools,
+            function_tools=[],
+            settings=settings,
+        )
+
+    async def _handle_unstructured_follow_up(
+        self,
+        messages: list[ModelMessage],
+        model_request_parameters: ModelRequestParameters,
+        original_settings: ClaudeCodeSettings | None = None,
+    ) -> ModelResponse:
+        """Handle unstructured follow-up request when function selection is 'none'."""
+        settings = self._build_options(None, model_request_parameters)
+
+        if original_settings:
+            for key in ["additional_files", "timeout_seconds", "debug_save_prompts"]:
+                if key in original_settings:
+                    settings[key] = original_settings[key]
+
+        settings["__function_selection_mode__"] = False
+        self._prepare_working_directory(settings)
+
+        system_prompt_parts = []
+        if model_request_parameters and hasattr(model_request_parameters, "system_prompt"):
+            sp = getattr(model_request_parameters, "system_prompt", None)
+            if sp:
+                system_prompt_parts.append(sp)
+
+        unstructured_instruction = self._build_unstructured_output_instruction(settings)
+        system_prompt_parts.append(unstructured_instruction)
+
+        prompt = self._assemble_final_prompt(
+            messages, system_prompt_parts, settings, has_tool_results=False
+        )
+
+        response = await run_claude_async(prompt, settings=settings)
+        return self._convert_response(
+            response,
+            output_tools=[],
+            function_tools=[],
+            settings=settings,
+        )
+
+    # ===== Argument Collection Methods =====
+
+    async def _handle_argument_collection(
+        self,
+        messages: list[ModelMessage],
+        selected_function: str,
+        available_functions: dict[str, Any],
+        arg_response_for_usage: ClaudeJSONResponse,
+        original_settings: ClaudeCodeSettings | None = None,
+    ) -> ModelResponse:
+        """Handle argument collection for selected function."""
+        tool_def = available_functions.get(selected_function)
+        if not tool_def:
+            return self._create_model_response_with_usage(
+                arg_response_for_usage,
+                [TextPart(content=f"Error: Function '{selected_function}' not found")],
             )
 
-        # Validate schema
-        validation_error = self._validate_json_schema(parsed_data, schema)
-        if validation_error:
-            logger.error("Schema validation failed: %s", validation_error)
-            return None, validation_error
+        settings = self._build_options(None, ModelRequestParameters())
 
-        # Validation passed
-        logger.debug("Structured output validated successfully")
-        return parsed_data, None
+        if original_settings:
+            for key in ["additional_files", "timeout_seconds", "debug_save_prompts"]:
+                if key in original_settings:
+                    settings[key] = original_settings[key]
+
+        schema = tool_def.parameters_json_schema
+        settings["__tool_name"] = tool_def.name
+        settings["__tool_description"] = tool_def.description
+
+        working_dir = _determine_working_directory(settings)
+        settings["__working_directory"] = working_dir
+
+        instruction = self._build_argument_collection_instruction(
+            schema, settings, tool_def.name, tool_def.description
+        )
+
+        # Format messages
+        formatted_messages = format_messages_for_claude(
+            messages, skip_system_prompt=True, working_dir=working_dir
+        )
+        user_request_path = Path(working_dir) / "user_request.md"
+        user_request_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(user_request_path, "w", encoding="utf-8") as f:
+            f.write(formatted_messages)
+
+        arg_prompt = instruction
+        existing_prompt = settings.get("append_system_prompt")
+        if existing_prompt:
+            arg_prompt = f"{existing_prompt}\n\n{arg_prompt}"
+            settings.pop("append_system_prompt", None)
+
+        # Try collection with retries
+        max_retries = 1
+        error_msg = None
+
+        for attempt in range(max_retries + 1):
+            if attempt > 0:
+                arg_prompt = self._build_retry_prompt(
+                    messages, schema, settings, error_msg or ""
+                )
+
+            arg_response = await run_claude_async(arg_prompt, settings=settings)
+
+            structured_file = settings.get("__structured_output_file")
+            if structured_file:
+                parsed_args, error_msg = self._read_structured_output_file(
+                    structured_file, schema, settings
+                )
+
+                if parsed_args:
+                    tool_call = create_tool_call_part(
+                        tool_name=str(selected_function),
+                        args=parsed_args,
+                    )
+                    return self._create_model_response_with_usage(
+                        arg_response, [tool_call]
+                    )
+
+                if error_msg and attempt < max_retries:
+                    continue
+
+                if error_msg:
+                    return self._create_model_response_with_usage(
+                        arg_response, [TextPart(content=error_msg)]
+                    )
+
+        result_text = arg_response.get("result", "")
+        error_msg = f"Could not interpret the parameters from response: {result_text[:500]}"
+        return self._create_model_response_with_usage(
+            arg_response, [TextPart(content=error_msg)]
+        )
+
+    def _build_argument_collection_instruction(
+        self,
+        schema: dict[str, Any],
+        settings: ClaudeCodeSettings,
+        tool_name: str | None = None,
+        tool_description: str | None = None,
+    ) -> str:
+        """Build instruction for argument collection using file/folder structure."""
+        working_dir = settings.get("__working_directory", "/tmp")
+        output_filename = generate_output_file_path(
+            working_dir, "claude_structured_output", ".json"
+        )
+        settings["__structured_output_file"] = output_filename
+
+        temp_data_dir = generate_temp_directory_path(
+            working_dir, "claude_data_structure", short_id=True
+        )
+        settings["__temp_json_dir"] = temp_data_dir
+
+        return build_structure_instructions(
+            schema, temp_data_dir, tool_name, tool_description
+        )
+
+    def _build_retry_prompt(
+        self,
+        messages: list[ModelMessage],
+        schema: dict[str, Any],
+        arg_settings: ClaudeCodeSettings,
+        error_msg: str,
+    ) -> str:
+        """Build prompt for retry attempt after validation error."""
+        working_dir = arg_settings.get("__working_directory", "/tmp")
+        temp_data_dir = generate_temp_directory_path(
+            working_dir, "claude_data_structure", short_id=True
+        )
+        arg_settings["__temp_json_dir"] = temp_data_dir
+
+        tool_name: str | None = arg_settings.get("__tool_name")
+        tool_description: str | None = arg_settings.get("__tool_description")
+
+        instruction = self._build_argument_collection_instruction(
+            schema, arg_settings, tool_name, tool_description
+        )
+
+        retry_instruction = f"""
+PREVIOUS ATTEMPT HAD ERRORS:
+{error_msg}
+
+Please fix the issues above and try again. Follow the directory structure instructions carefully."""
+
+        formatted_messages = format_messages_for_claude(
+            messages, skip_system_prompt=True, working_dir=working_dir
+        )
+        user_request_path = Path(working_dir) / "user_request.md"
+        user_request_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(user_request_path, "w", encoding="utf-8") as f:
+            f.write(formatted_messages)
+
+        return f"{instruction}\n\n{retry_instruction}"
+
+    # ===== Utility Methods =====
 
     def _read_structured_output_file(
         self,
@@ -1753,36 +1143,78 @@ Use the Read tool to read `user_request.md` for the user's request.
         schema: dict[str, Any],
         settings: ClaudeCodeSettings | None = None,
     ) -> tuple[dict[str, Any] | None, str | None]:
-        """Read and validate structured output file.
-
-        Args:
-            file_path: Path to structured output file
-            schema: JSON schema to validate against
-            settings: Settings that may contain temp directory path
-
-        Returns:
-            Tuple of (parsed_data, error_message). One will be None.
-        """
+        """Read and validate structured output file."""
         # Try reading from directory structure first
-        parsed_data, error_msg = self._try_read_directory_structure(settings, schema)
-        if parsed_data is not None or error_msg is not None:
-            return parsed_data, error_msg
+        temp_json_dir = settings.get("__temp_json_dir") if settings else None
+        if temp_json_dir and isinstance(temp_json_dir, str):
+            temp_path = Path(temp_json_dir)
+            if temp_path.exists():
+                try:
+                    parsed_data = read_structure_from_filesystem(schema, temp_path)
+                    return parsed_data, None
+                except RuntimeError as e:
+                    return None, str(e)
+                except Exception as e:
+                    return None, f"Could not read the data structure: {e}"
 
         # Fall back to reading JSON file
-        return self._try_read_json_file(file_path, schema)
+        if not Path(file_path).exists():
+            return None, None
 
-    def _try_extract_from_markdown(self, text: str) -> dict[str, Any] | None:
-        """Try to extract JSON by stripping markdown code blocks.
+        try:
+            with open(file_path, encoding="utf-8") as f:
+                file_content = f.read()
+            parsed_data = json.loads(file_content)
+            validation_error = self._validate_json_schema(parsed_data, schema)
+            if validation_error:
+                return None, validation_error
+            return parsed_data, None
+        except json.JSONDecodeError as e:
+            return None, f"The file content isn't formatted correctly: {e}"
+        except Exception as e:
+            return None, f"Failed to read file: {e}"
 
-        Args:
-            text: Text that may contain markdown-wrapped JSON
+    def _validate_json_schema(
+        self, data: dict[str, Any], schema: dict[str, Any]
+    ) -> str | None:
+        """Validate JSON data against schema."""
+        required_fields = schema.get("required", [])
+        missing_fields = [field for field in required_fields if field not in data]
 
-        Returns:
-            Parsed JSON dict if successful, None otherwise
-        """
-        # Remove markdown code blocks (```json or ```)
+        if missing_fields:
+            return f"Please provide: {', '.join(missing_fields)}"
+
+        properties = schema.get("properties", {})
+        for field_name, field_schema in properties.items():
+            if field_name in data:
+                expected_type = field_schema.get("type")
+                actual_value = data[field_name]
+
+                type_valid = True
+                if expected_type == "string" and not isinstance(actual_value, str):
+                    type_valid = False
+                elif expected_type == "integer" and not isinstance(actual_value, int):
+                    type_valid = False
+                elif expected_type == "number" and not isinstance(actual_value, (int, float)):
+                    type_valid = False
+                elif expected_type == "boolean" and not isinstance(actual_value, bool):
+                    type_valid = False
+                elif expected_type == "array" and not isinstance(actual_value, list):
+                    type_valid = False
+                elif expected_type == "object" and not isinstance(actual_value, dict):
+                    type_valid = False
+
+                if not type_valid:
+                    return f"The value for '{field_name}' should be a {expected_type}"
+
+        return None
+
+    def _extract_json_robust(self, text: str, schema: dict[str, Any]) -> dict[str, Any]:
+        """Extract JSON from text using multiple strategies."""
+        import re
+
+        # Try markdown extraction
         cleaned = strip_markdown_code_fence(text)
-
         try:
             parsed = json.loads(cleaned)
             if isinstance(parsed, dict):
@@ -1790,22 +1222,9 @@ Use the Read tool to read `user_request.md` for the user's request.
         except json.JSONDecodeError:
             pass
 
-        return None
-
-    def _try_extract_json_object(self, text: str) -> dict[str, Any] | None:
-        """Try to extract JSON object using regex pattern matching.
-
-        Args:
-            text: Text that may contain JSON object
-
-        Returns:
-            Parsed JSON dict if successful, None otherwise
-        """
-        import re
-
+        # Try JSON object extraction
         json_pattern = r"\{(?:[^{}]|\{[^{}]*\})*\}"
         matches = re.findall(json_pattern, text, re.DOTALL)
-
         for match in matches:
             try:
                 parsed = json.loads(match)
@@ -1814,25 +1233,9 @@ Use the Read tool to read `user_request.md` for the user's request.
             except json.JSONDecodeError:
                 continue
 
-        return None
-
-    def _try_extract_json_array(
-        self, text: str, schema: dict[str, Any]
-    ) -> dict[str, Any] | None:
-        """Try to extract JSON array and wrap in single-field schema.
-
-        Args:
-            text: Text that may contain JSON array
-            schema: JSON schema to validate against
-
-        Returns:
-            Wrapped JSON dict if successful, None otherwise
-        """
-        import re
-
+        # Try array extraction
         array_pattern = r"\[(?:[^\[\]]|\[[^\[\]]*\])*\]"
         array_matches = re.findall(array_pattern, text, re.DOTALL)
-
         for match in array_matches:
             try:
                 parsed = json.loads(match)
@@ -1844,119 +1247,28 @@ Use the Read tool to read `user_request.md` for the user's request.
             except json.JSONDecodeError:
                 continue
 
-        return None
-
-
-    def _try_single_field_autowrap(
-        self, text: str, schema: dict[str, Any]
-    ) -> dict[str, Any] | None:
-        """Try to auto-wrap value for single-field schemas.
-
-        Args:
-            text: Text containing a value to wrap
-            schema: JSON schema (must have single field)
-
-        Returns:
-            Wrapped JSON dict if successful, None otherwise
-        """
+        # Try single field autowrap
         properties = schema.get("properties", {})
-        if len(properties) != 1:
-            return None
+        if len(properties) == 1:
+            field_name = list(properties.keys())[0]
+            field_type = properties[field_name].get("type")
+            value = text.strip()
 
-        field_name = list(properties.keys())[0]
-        field_type = properties[field_name].get("type")
+            if value.startswith('"') and value.endswith('"'):
+                value = value[1:-1]
+            elif value.startswith("'") and value.endswith("'"):
+                value = value[1:-1]
 
-        cleaned = text.strip()
+            converted = convert_primitive_value(value, field_type)
+            if converted is not None:
+                return {field_name: converted}
 
-        # Try parsing as JSON first (could be array/object)
-        try:
-            parsed_value = json.loads(cleaned)
-            if (
-                field_type == "array"
-                and isinstance(parsed_value, list)
-                or field_type == "object"
-                and isinstance(parsed_value, dict)
-            ):
-                return {field_name: parsed_value}
-        except json.JSONDecodeError:
-            pass
-
-        # Handle comma-separated lists for arrays
-        if field_type == "array":
-            value = cleaned.strip()
-            if "," in value or " and " in value or " or " in value:
-                value = value.replace(" and ", ",").replace(" or ", ",")
-                items = [item.strip().strip("\"'") for item in value.split(",")]
-                items = [item for item in items if item]
-                if items:
-                    return {field_name: items}
-
-        # Try primitive value wrapping
-        value = cleaned.strip()
-
-        # Remove quotes
-        if (
-            value.startswith('"')
-            and value.endswith('"')
-            or value.startswith("'")
-            and value.endswith("'")
-        ):
-            value = value[1:-1]
-
-        # Type conversion
-        converted = convert_primitive_value(value, field_type)
-        if converted is not None:
-            return {field_name: converted}
-
-        return None
-
-    def _extract_json_robust(self, text: str, schema: dict[str, Any]) -> dict[str, Any]:
-        """Extract JSON from text using multiple robust strategies.
-
-        Args:
-            text: Raw text that may contain JSON
-            schema: JSON schema for the expected structure
-
-        Returns:
-            Extracted JSON as dict
-
-        Raises:
-            json.JSONDecodeError: If JSON cannot be extracted
-        """
-        # Try each extraction strategy in order
-        result = self._try_extract_from_markdown(text)
-        if result:
-            return result
-
-        result = self._try_extract_json_object(text)
-        if result:
-            return result
-
-        result = self._try_extract_json_array(text, schema)
-        if result:
-            return result
-
-        result = self._try_single_field_autowrap(text, schema)
-        if result:
-            return result
-
-        # If all strategies fail, raise error
-        raise json.JSONDecodeError(
-            "Could not extract valid JSON from response", text, 0
-        )
+        raise json.JSONDecodeError("Could not extract valid JSON from response", text, 0)
 
     def _get_model_name(self, response: ClaudeJSONResponse) -> str:
-        """Extract model name from Claude response.
-
-        Args:
-            response: Claude CLI JSON response
-
-        Returns:
-            Model name string
-        """
-        model_name = self._model_name
+        """Extract model name from Claude response."""
+        model_name = self._model_alias
         if "modelUsage" in response and response.get("modelUsage"):
-            # Use the actual model name from the response
             model_names = list(response["modelUsage"].keys())
             if model_names:
                 model_name = model_names[0]
@@ -1964,14 +1276,7 @@ Use the Read tool to read `user_request.md` for the user's request.
 
     @staticmethod
     def _create_usage(response: ClaudeJSONResponse) -> RequestUsage:
-        """Create usage info from Claude response.
-
-        Args:
-            response: Claude CLI JSON response
-
-        Returns:
-            Request usage information
-        """
+        """Create usage info from Claude response."""
         usage_data = response.get("usage", {})
         server_tool_use = (
             usage_data.get("server_tool_use", {})
@@ -1985,23 +1290,13 @@ Use the Read tool to read `user_request.md` for the user's request.
         )
 
         return RequestUsage(
-            input_tokens=usage_data.get("input_tokens", 0)
-            if isinstance(usage_data, dict)
-            else 0,
-            cache_write_tokens=usage_data.get("cache_creation_input_tokens", 0)
-            if isinstance(usage_data, dict)
-            else 0,
-            cache_read_tokens=usage_data.get("cache_read_input_tokens", 0)
-            if isinstance(usage_data, dict)
-            else 0,
-            output_tokens=usage_data.get("output_tokens", 0)
-            if isinstance(usage_data, dict)
-            else 0,
+            input_tokens=usage_data.get("input_tokens", 0) if isinstance(usage_data, dict) else 0,
+            cache_write_tokens=usage_data.get("cache_creation_input_tokens", 0) if isinstance(usage_data, dict) else 0,
+            cache_read_tokens=usage_data.get("cache_read_input_tokens", 0) if isinstance(usage_data, dict) else 0,
+            output_tokens=usage_data.get("output_tokens", 0) if isinstance(usage_data, dict) else 0,
             details={
                 "web_search_requests": web_search_requests,
-                "total_cost_usd_cents": int(
-                    response.get("total_cost_usd", 0.0) * 100
-                ),  # Store as cents
+                "total_cost_usd_cents": int(response.get("total_cost_usd", 0.0) * 100),
                 "duration_ms": response.get("duration_ms", 0),
                 "duration_api_ms": response.get("duration_api_ms", 0),
                 "num_turns": response.get("num_turns", 0),

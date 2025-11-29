@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Apex Law School - Excellence in Legal Education</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Georgia', 'Times New Roman', serif;
+            line-height: 1.6;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        /* Header */
+        header {
+            background-color: #1a2a4a;
+            padding: 15px 0;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            color: #c9a227;
+            font-size: 1.8rem;
+            font-weight: bold;
+            text-decoration: none;
+        }
+
+        nav ul {
+            display: flex;
+            list-style: none;
+            gap: 30px;
+        }
+
+        nav a {
+            color: #fff;
+            text-decoration: none;
+            font-size: 0.95rem;
+            transition: color 0.3s;
+        }
+
+        nav a:hover {
+            color: #c9a227;
+        }
+
+        /* Hero Section */
+        .hero {
+            background: linear-gradient(rgba(26, 42, 74, 0.9), rgba(26, 42, 74, 0.9)), url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600"><rect fill="%231a2a4a"/></svg>');
+            background-size: cover;
+            background-position: center;
+            color: #fff;
+            padding: 120px 0;
+            text-align: center;
+        }
+
+        .hero h1 {
+            font-size: 3.5rem;
+            margin-bottom: 20px;
+            line-height: 1.2;
+        }
+
+        .hero p {
+            font-size: 1.3rem;
+            margin-bottom: 40px;
+            max-width: 700px;
+            margin-left: auto;
+            margin-right: auto;
+            opacity: 0.9;
+        }
+
+        .cta-button {
+            display: inline-block;
+            background-color: #c9a227;
+            color: #1a2a4a;
+            padding: 15px 40px;
+            text-decoration: none;
+            font-weight: bold;
+            font-size: 1.1rem;
+            border-radius: 4px;
+            transition: background-color 0.3s, transform 0.3s;
+        }
+
+        .cta-button:hover {
+            background-color: #d4b23f;
+            transform: translateY(-2px);
+        }
+
+        /* Statistics Section */
+        .statistics {
+            background-color: #fff;
+            padding: 80px 0;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 40px;
+            text-align: center;
+        }
+
+        .stat-item {
+            padding: 30px;
+        }
+
+        .stat-number {
+            font-size: 3.5rem;
+            color: #c9a227;
+            font-weight: bold;
+            display: block;
+        }
+
+        .stat-label {
+            font-size: 1.1rem;
+            color: #1a2a4a;
+            margin-top: 10px;
+        }
+
+        /* Programs Section */
+        .programs {
+            background-color: #f5f5f5;
+            padding: 80px 0;
+        }
+
+        .section-title {
+            text-align: center;
+            font-size: 2.5rem;
+            color: #1a2a4a;
+            margin-bottom: 50px;
+        }
+
+        .programs-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+        }
+
+        .program-card {
+            background-color: #fff;
+            padding: 40px 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s;
+        }
+
+        .program-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .program-card h3 {
+            color: #1a2a4a;
+            font-size: 1.5rem;
+            margin-bottom: 15px;
+        }
+
+        .program-card p {
+            color: #666;
+            margin-bottom: 20px;
+        }
+
+        .program-link {
+            color: #c9a227;
+            text-decoration: none;
+            font-weight: bold;
+        }
+
+        .program-link:hover {
+            text-decoration: underline;
+        }
+
+        /* Testimonial Section */
+        .testimonial {
+            background-color: #1a2a4a;
+            color: #fff;
+            padding: 80px 0;
+            text-align: center;
+        }
+
+        .testimonial-content {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .testimonial blockquote {
+            font-size: 1.4rem;
+            font-style: italic;
+            line-height: 1.8;
+            margin-bottom: 30px;
+        }
+
+        .testimonial-author {
+            font-weight: bold;
+            color: #c9a227;
+        }
+
+        .testimonial-title {
+            font-size: 0.9rem;
+            opacity: 0.8;
+            margin-top: 5px;
+        }
+
+        /* Deadline Section */
+        .deadline {
+            background-color: #c9a227;
+            color: #1a2a4a;
+            padding: 40px 0;
+            text-align: center;
+        }
+
+        .deadline h2 {
+            font-size: 1.8rem;
+            margin-bottom: 10px;
+        }
+
+        .deadline p {
+            font-size: 1.2rem;
+            margin-bottom: 20px;
+        }
+
+        .deadline-button {
+            display: inline-block;
+            background-color: #1a2a4a;
+            color: #fff;
+            padding: 12px 30px;
+            text-decoration: none;
+            font-weight: bold;
+            border-radius: 4px;
+            transition: background-color 0.3s;
+        }
+
+        .deadline-button:hover {
+            background-color: #2a3a5a;
+        }
+
+        /* Footer */
+        footer {
+            background-color: #1a2a4a;
+            color: #fff;
+            padding: 60px 0 30px;
+        }
+
+        .footer-content {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 40px;
+            margin-bottom: 40px;
+        }
+
+        .footer-section h4 {
+            color: #c9a227;
+            margin-bottom: 20px;
+            font-size: 1.2rem;
+        }
+
+        .footer-section p,
+        .footer-section a {
+            color: #ccc;
+            text-decoration: none;
+            display: block;
+            margin-bottom: 10px;
+            font-size: 0.95rem;
+        }
+
+        .footer-section a:hover {
+            color: #c9a227;
+        }
+
+        .social-links {
+            display: flex;
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .social-links a {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
+            background-color: rgba(255, 255, 255, 0.1);
+            border-radius: 50%;
+            color: #fff;
+            text-decoration: none;
+            transition: background-color 0.3s;
+        }
+
+        .social-links a:hover {
+            background-color: #c9a227;
+        }
+
+        .footer-bottom {
+            text-align: center;
+            padding-top: 30px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            color: #999;
+            font-size: 0.9rem;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .header-content {
+                flex-direction: column;
+                gap: 15px;
+            }
+
+            nav ul {
+                gap: 15px;
+            }
+
+            .hero h1 {
+                font-size: 2.5rem;
+            }
+
+            .hero p {
+                font-size: 1.1rem;
+            }
+
+            .stat-number {
+                font-size: 2.5rem;
+            }
+
+            .section-title {
+                font-size: 2rem;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .hero {
+                padding: 80px 0;
+            }
+
+            .hero h1 {
+                font-size: 2rem;
+            }
+
+            nav ul {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <a href="#" class="logo">APEX LAW SCHOOL</a>
+                <nav>
+                    <ul>
+                        <li><a href="#programs">Programs</a></li>
+                        <li><a href="#admissions">Admissions</a></li>
+                        <li><a href="#faculty">Faculty</a></li>
+                        <li><a href="#contact">Contact</a></li>
+                    </ul>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <section class="hero">
+            <div class="container">
+                <h1>Shape the Future of Justice</h1>
+                <p>At Apex Law School, we cultivate the next generation of legal leaders through rigorous academics, experiential learning, and an unwavering commitment to ethics and excellence.</p>
+                <a href="#apply" class="cta-button">Begin Your Journey</a>
+            </div>
+        </section>
+
+        <section class="statistics">
+            <div class="container">
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <span class="stat-number">94%</span>
+                        <p class="stat-label">Bar Passage Rate</p>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-number">91%</span>
+                        <p class="stat-label">Employment Within 10 Months</p>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-number">28,000+</span>
+                        <p class="stat-label">Alumni Worldwide</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="programs" id="programs">
+            <div class="container">
+                <h2 class="section-title">Featured Programs</h2>
+                <div class="programs-grid">
+                    <article class="program-card">
+                        <h3>Juris Doctor (JD)</h3>
+                        <p>Our flagship three-year program provides comprehensive legal training with specialized tracks in corporate law, public interest, intellectual property, and more.</p>
+                        <a href="#" class="program-link">Explore JD Program →</a>
+                    </article>
+                    <article class="program-card">
+                        <h3>Master of Laws (LLM)</h3>
+                        <p>Advanced study for practicing attorneys and international lawyers seeking specialized expertise in areas such as tax law, international law, and healthcare law.</p>
+                        <a href="#" class="program-link">Explore LLM Program →</a>
+                    </article>
+                    <article class="program-card">
+                        <h3>Joint Degree Programs</h3>
+                        <p>Combine your legal education with an MBA, MPP, or other graduate degree to expand your career opportunities and interdisciplinary expertise.</p>
+                        <a href="#" class="program-link">Explore Joint Degrees →</a>
+                    </article>
+                </div>
+            </div>
+        </section>
+
+        <section class="testimonial">
+            <div class="container">
+                <div class="testimonial-content">
+                    <blockquote>
+                        "Apex Law School gave me the foundation to argue cases before the Supreme Court. The faculty's mentorship and the clinic experience were invaluable in shaping my career. I carry the lessons I learned here into every courtroom."
+                    </blockquote>
+                    <p class="testimonial-author">The Honorable Sarah Chen '98</p>
+                    <p class="testimonial-title">U.S. Court of Appeals Judge, Ninth Circuit</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="deadline" id="apply">
+            <div class="container">
+                <h2>Application Deadline Approaching</h2>
+                <p>Fall 2025 Early Decision: <strong>November 15, 2024</strong> | Regular Decision: <strong>March 1, 2025</strong></p>
+                <a href="#" class="deadline-button">Apply Now</a>
+            </div>
+        </section>
+    </main>
+
+    <footer id="contact">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h4>Contact Us</h4>
+                    <p>Apex Law School</p>
+                    <p>500 Justice Avenue</p>
+                    <p>Cambridge, MA 02138</p>
+                    <p>Phone: (617) 555-0123</p>
+                    <p>Email: admissions@apexlaw.edu</p>
+                </div>
+                <div class="footer-section">
+                    <h4>Quick Links</h4>
+                    <a href="#">Admissions</a>
+                    <a href="#">Financial Aid</a>
+                    <a href="#">Career Services</a>
+                    <a href="#">Alumni Network</a>
+                    <a href="#">News & Events</a>
+                </div>
+                <div class="footer-section">
+                    <h4>Connect With Us</h4>
+                    <p>Follow us on social media for the latest updates and community highlights.</p>
+                    <div class="social-links">
+                        <a href="#" aria-label="Facebook">f</a>
+                        <a href="#" aria-label="Twitter">X</a>
+                        <a href="#" aria-label="LinkedIn">in</a>
+                        <a href="#" aria-label="Instagram">ig</a>
+                        <a href="#" aria-label="YouTube">▶</a>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2024 Apex Law School. All rights reserved. | <a href="#">Privacy Policy</a> | <a href="#">Accessibility</a></p>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>

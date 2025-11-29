@@ -1,0 +1,83 @@
+"""JSON utilities for Claude Code model.
+
+This module provides JSON-related utility functions for parsing and cleaning
+JSON content from Claude CLI responses.
+"""
+
+import json
+import logging
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+def strip_markdown_code_fence(text: str) -> str:
+    """
+    Remove surrounding Markdown code fence markers and return the inner content.
+    
+    Parameters:
+        text (str): Input text that may be wrapped with Markdown code fences (for example, ```json ... ```).
+    
+    Returns:
+        str: The input text with surrounding code fence markers removed and leading/trailing whitespace trimmed.
+    """
+    cleaned = text.strip()
+
+    # Remove starting code fence
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:]
+    elif cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+
+    # Remove ending code fence
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+
+    return cleaned.strip()
+
+
+def extract_json_from_text(text: str, schema: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """
+    Extract a JSON object from a text blob using multiple fallback strategies.
+    
+    Attempts, in order:
+    1) Parse the text after removing markdown code fences.
+    2) Locate and parse a JSON object substring delimited by the first '{' and last '}'.
+    3) If a JSON Schema-like `schema` with exactly one property is provided, return a dict mapping that property name to the cleaned text.
+    
+    Parameters:
+        text (str): Input text that may contain JSON or plain content.
+        schema (dict[str, Any] | None): Optional schema guiding extraction. If provided and it contains a single property under the "properties" key, the cleaned text will be returned wrapped as the value for that property.
+    
+    Returns:
+        dict[str, Any] | None: The parsed JSON object on success, or `None` if no valid extraction could be made.
+    """
+    # Strategy 1: Direct parse after stripping markdown
+    cleaned = strip_markdown_code_fence(text)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: Find JSON object in text
+    try:
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        if start >= 0 and end > start:
+            json_str = text[start:end]
+            return json.loads(json_str)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 3: If schema has single field, try wrapping
+    if schema and "properties" in schema:
+        props = schema.get("properties", {})
+        if len(props) == 1:
+            field_name = list(props.keys())[0]
+            try:
+                return {field_name: cleaned}
+            except Exception:
+                pass
+
+    logger.warning("Failed to extract JSON from text")
+    return None

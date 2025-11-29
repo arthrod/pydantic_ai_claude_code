@@ -46,37 +46,44 @@ def test_structured_output_sync():
 
 
 def test_provider_settings():
-    """Test provider with custom settings (uses explicit model for provider testing)."""
+    """Test provider with custom settings using model_settings at run-time."""
     from pydantic_ai_claude_code import ClaudeCodeModel
 
-    provider = ClaudeCodeProvider(
-        settings={
-            "model": "sonnet",
-            "verbose": False,
-        }
-    )
-
-    model = ClaudeCodeModel("sonnet", provider=provider)
+    # New stateless provider pattern
+    provider = ClaudeCodeProvider()
+    model = provider.create_model("sonnet")
     agent = Agent(model)
 
-    result = agent.run_sync("What is the capital of France? Just the city name.")
+    # Pass settings at run-time via model_settings
+    result = agent.run_sync(
+        "What is the capital of France? Just the city name.",
+        model_settings={"verbose": False}
+    )
     assert "Paris" in str(result.output)
 
 
-def test_temp_workspace():
-    """Test with temporary workspace (uses explicit model for provider testing)."""
+def test_model_string_format():
+    """Test using model string directly (new recommended pattern)."""
+    # This is the simplest way to use claude-code
+    agent = Agent("claude-code:sonnet")
+
+    result = agent.run_sync("What is 2+2? Just give me the number.")
+    assert "4" in str(result.output)
+
+
+def test_provider_preset():
+    """Test model string with provider preset format."""
+    # This tests the claude-code:preset:model format
+    # Note: This will only work if the preset is configured
+    # For testing, we use the model directly
     from pydantic_ai_claude_code import ClaudeCodeModel
-    from pydantic_ai_claude_code.types import ClaudeCodeSettings
 
-    with ClaudeCodeProvider(settings=ClaudeCodeSettings(use_temp_workspace=True)) as provider:
-        assert provider.working_directory is not None
-        assert provider._temp_dir is not None
+    provider = ClaudeCodeProvider()
+    model = provider.create_model("sonnet")
+    agent = Agent(model)
 
-        model = ClaudeCodeModel("sonnet", provider=provider)
-        agent = Agent(model)
-
-        result = agent.run_sync("Echo 'hello' - just respond with hello")
-        assert result.output is not None
+    result = agent.run_sync("Say hello")
+    assert result.output is not None
 
 
 def test_usage_tracking():

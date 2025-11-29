@@ -265,8 +265,8 @@ providers:
       env:
         ANTHROPIC_BASE_URL: "https://www.dmxapi.cn"
     endpoint_candidates:
-      - "https://aihubmix.com"
-      - "https://api.aihubmix.com"
+      - "https://www.dmxapi.cn"
+      - "https://api.dmxapi.cn"
 
   packycode:
     name: "PackyCode"
