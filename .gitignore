@@ -12,6 +12,8 @@ __pycache__/
 # Credentials and tokens
 # Python-generated files
 # Test artifacts
+.coverage
+htmlcov/
 # Virtual environments
 build/
 dist/
