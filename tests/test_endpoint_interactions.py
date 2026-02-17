@@ -60,11 +60,7 @@ EXPECTED_INPUT_TOKENS = 100
 EXPECTED_OUTPUT_TOKENS = 50
 EXPECTED_DURATION_MS = 1500
 EXPECTED_ALICE_AGE = 30
-EXPECTED_BOB_AGE = 25
 CUSTOM_TIMEOUT = 300
-EXPECTED_CONTEXT_MESSAGES = 4
-EXPECTED_CONTEXT_USER_MSGS = 2
-EXPECTED_CONTEXT_ASSISTANT_MSGS = 2
 
 
 # ===== Fixtures =====
@@ -1182,3 +1178,81 @@ class TestStructuredOutputFileHandling:
         assert data is None
         assert error is not None
         assert "formatted correctly" in error.lower() or "content" in error.lower()
+
+
+# ===== Section 13: Smoke Test =====
+
+
+class TestSmokeTest:
+    """Smoke test verifying the public API can be imported and trivial calls succeed.
+
+    Per testing instructions: "For libraries: assert the public API can be
+    imported and a trivial call succeeds."
+    """
+
+    def test_public_api_importable(self):
+        """Verify all public API symbols are importable."""
+        import pydantic_ai_claude_code as pkg
+
+        public_symbols = [
+            "ClaudeCodeModel",
+            "ClaudeCodeProvider",
+            "ClaudeCodeSettings",
+            "ClaudeOAuthError",
+            "MCPTool",
+            "ProviderPreset",
+            "__version__",
+            "calculate_wait_time",
+            "detect_cli_infrastructure_failure",
+            "detect_oauth_error",
+            "detect_rate_limit",
+            "get_preset",
+            "get_presets_by_category",
+            "list_presets",
+            "load_all_presets",
+        ]
+
+        for symbol in public_symbols:
+            assert hasattr(pkg, symbol), f"Missing public symbol: {symbol}"
+            assert getattr(pkg, symbol) is not None, f"Symbol is None: {symbol}"
+
+    def test_version_is_valid(self):
+        """Verify package version is a non-empty string."""
+        from pydantic_ai_claude_code import __version__
+
+        assert isinstance(__version__, str)
+        assert len(__version__) > 0
+
+    def test_trivial_model_instantiation(self):
+        """Verify ClaudeCodeModel can be instantiated without side effects."""
+        model = ClaudeCodeModel(model_name="sonnet")
+        assert model.model_name == "claude-code:sonnet"
+        assert model.system == "claude-code"
+
+    def test_trivial_provider_instantiation(self):
+        """Verify ClaudeCodeProvider can be instantiated without side effects."""
+        provider = ClaudeCodeProvider()
+        assert provider.name == "claude-code"
+
+    def test_trivial_agent_creation(self):
+        """Verify Agent with claude-code model string can be created."""
+        agent = Agent("claude-code:sonnet")
+        assert agent is not None
+
+    def test_presets_loadable(self):
+        """Verify provider presets can be loaded from YAML."""
+        from pydantic_ai_claude_code import list_presets
+
+        presets = list_presets()
+        assert isinstance(presets, list)
+        assert len(presets) > 0
+
+    def test_trivial_run_with_test_model(self):
+        """Verify a trivial agent.run succeeds end-to-end with TestModel."""
+        agent = Agent("claude-code:sonnet")
+        m = TestModel(custom_output_text="smoke-ok")
+
+        with agent.override(model=m):
+            result = agent.run_sync("ping")
+
+        assert result.output == "smoke-ok"
